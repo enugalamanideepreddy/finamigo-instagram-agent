@@ -1,0 +1,7 @@
+.env
+*.png
+__pycache__/
+*.pyc
+draft.json
+FEATURES_CACHE.md
+venv/

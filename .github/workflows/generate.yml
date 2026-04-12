@@ -1,0 +1,40 @@
+name: Generate Daily Post Draft
+
+on:
+  schedule:
+    - cron: '30 4 * * *'    # 10:00 AM IST daily
+  workflow_dispatch:         # Manual trigger for testing
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate draft and send for approval
+        run: python agent.py --generate
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
+          AGENT_EMAIL: ${{ secrets.AGENT_EMAIL }}
+          AGENT_EMAIL_PASSWORD: ${{ secrets.AGENT_EMAIL_PASSWORD }}
+          APPROVAL_EMAIL: ${{ secrets.APPROVAL_EMAIL }}
+          GOOGLE_FORM_URL: ${{ secrets.GOOGLE_FORM_URL }}
+          GOOGLE_FORM_PREFILL_PARAM: ${{ secrets.GOOGLE_FORM_PREFILL_PARAM }}
+          FEATURES_URL: https://raw.githubusercontent.com/enugalamanideepreddy/FinAmigo/main/FEATURES.md
+
+      - name: Upload draft artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-${{ github.run_id }}
+          path: draft.json
+          retention-days: 2
