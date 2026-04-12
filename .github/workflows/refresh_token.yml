@@ -1,0 +1,61 @@
+name: Refresh Instagram Token
+
+on:
+  schedule:
+    - cron: '0 6 * * 0'   # Every Sunday at 11:30 AM IST
+  workflow_dispatch:        # Manual trigger
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exchange for new long-lived token
+        id: refresh
+        run: |
+          RESPONSE=$(curl -s "https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${{ secrets.META_APP_ID }}&client_secret=${{ secrets.META_APP_SECRET }}&fb_exchange_token=${{ secrets.INSTAGRAM_ACCESS_TOKEN }}")
+
+          NEW_TOKEN=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
+          EXPIRES_IN=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('expires_in','0'))")
+
+          if [ -z "$NEW_TOKEN" ]; then
+            echo "ERROR: Token refresh failed!"
+            echo "$RESPONSE"
+            exit 1
+          fi
+
+          echo "Token refreshed! Expires in $(( EXPIRES_IN / 86400 )) days."
+          echo "new_token=$NEW_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Update GitHub secret
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const sodium = require('tweetsodium');
+            const key = (await github.rest.actions.getRepoPublicKey({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            })).data;
+
+            const encrypted = Buffer.from(
+              sodium.seal(
+                Buffer.from('${{ steps.refresh.outputs.new_token }}'),
+                Buffer.from(key.key, 'base64')
+              )
+            ).toString('base64');
+
+            await github.rest.actions.createOrUpdateRepoSecret({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              secret_name: 'INSTAGRAM_ACCESS_TOKEN',
+              encrypted_value: encrypted,
+              key_id: key.key_id,
+            });
+
+            console.log('INSTAGRAM_ACCESS_TOKEN secret updated!');
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "⚠️ Instagram token refresh failed! Manual intervention needed."
+          echo "Go to https://developers.facebook.com to generate a new token."
