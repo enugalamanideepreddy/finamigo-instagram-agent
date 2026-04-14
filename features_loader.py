@@ -17,8 +17,13 @@ def fetch_features() -> str:
     """Fetch FEATURES.md from GitHub, fall back to local cache."""
     try:
         print("[Features] Fetching FEATURES.md from GitHub...")
+        gh_pat = os.environ.get("GH_PAT", "")
+        cmd = ["curl", "-s", "-m", "15", "-f"]
+        if gh_pat:
+            cmd += ["-H", f"Authorization: token {gh_pat}"]
+        cmd.append(FEATURES_URL)
         result = subprocess.run(
-            ["curl", "-s", "-m", "15", "-f", FEATURES_URL],
+            cmd,
             capture_output=True, text=True, timeout=20,
         )
         if result.returncode == 0 and result.stdout.strip():

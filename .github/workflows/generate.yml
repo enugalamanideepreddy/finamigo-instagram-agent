@@ -31,6 +31,7 @@ jobs:
           GOOGLE_FORM_URL: ${{ secrets.GOOGLE_FORM_URL }}
           GOOGLE_FORM_PREFILL_PARAM: ${{ secrets.GOOGLE_FORM_PREFILL_PARAM }}
           FEATURES_URL: https://raw.githubusercontent.com/enugalamanideepreddy/FinAmigo/main/FEATURES.md
+          GH_PAT: ${{ secrets.GH_PAT }}
 
       - name: Upload draft artifact
         uses: actions/upload-artifact@v4

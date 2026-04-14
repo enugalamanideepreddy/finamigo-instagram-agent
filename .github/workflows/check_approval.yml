@@ -2,13 +2,27 @@ name: Check Approval & Post
 
 on:
   schedule:
-    - cron: '*/5 5-17 * * *'
-  workflow_dispatch:         # Manual trigger
+    - cron: '*/30 5-9 * * *'   # Every 30 min, 10:30 AM–3:00 PM IST only
+  workflow_dispatch:             # Manual trigger
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - name: Download latest draft artifact
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          pattern: draft-*
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Skip if no draft pending
+        if: steps.download.outcome == 'failure' || !hashFiles('draft.json')
+        run: |
+          echo "No pending draft. Nothing to do today."
+          exit 0
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -18,20 +32,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Download latest draft artifact
-        uses: actions/download-artifact@v4
-        with:
-          pattern: draft-*
-          merge-multiple: true
-        continue-on-error: true
-
       - name: Check approval and act
-        run: |
-          if [ -f draft.json ]; then
-            python agent.py --check
-          else
-            echo "No pending draft found. Skipping."
-          fi
+        run: python agent.py --check
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
@@ -44,6 +46,7 @@ jobs:
           GOOGLE_FORM_PREFILL_PARAM: ${{ secrets.GOOGLE_FORM_PREFILL_PARAM }}
           GOOGLE_SHEET_CSV_URL: ${{ secrets.GOOGLE_SHEET_CSV_URL }}
           FEATURES_URL: https://raw.githubusercontent.com/enugalamanideepreddy/FinAmigo/main/FEATURES.md
+          GH_PAT: ${{ secrets.GH_PAT }}
 
       - name: Upload updated draft (if regenerated)
         if: always()
