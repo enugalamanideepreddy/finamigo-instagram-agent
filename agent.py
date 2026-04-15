@@ -133,10 +133,33 @@ THEME_POOL = [
 ]
 
 
+_STATE_PATH = os.path.join(os.path.dirname(__file__), "agent_state.json")
+
+def _load_state() -> dict:
+    if os.path.exists(_STATE_PATH):
+        with open(_STATE_PATH) as f:
+            return json.load(f)
+    return {"used_themes": [], "used_images": []}
+
+def _save_state(state: dict) -> None:
+    with open(_STATE_PATH, "w") as f:
+        json.dump(state, f, indent=2)
+
+
 def pick_theme() -> str:
-    """Select today's theme using day-of-year rotation."""
-    idx = datetime.now().timetuple().tm_yday % len(THEME_POOL)
-    return THEME_POOL[idx]
+    """Pick the next unused theme, cycling through the full pool before repeating."""
+    state = _load_state()
+    used = state.get("used_themes", [])
+    remaining = [t for t in THEME_POOL if t not in used]
+    if not remaining:
+        # Full cycle complete — reset and start again
+        used = []
+        remaining = list(THEME_POOL)
+    theme = remaining[0]
+    used.append(theme)
+    state["used_themes"] = used
+    _save_state(state)
+    return theme
 
 
 # ── Content Generation ───────────────────────────────────────────────────────
@@ -228,12 +251,21 @@ def load_static_images() -> list:
 
 
 def pick_static_image() -> str:
-    """Pick an image from the static pool based on day rotation."""
+    """Pick the next unused static image, cycling through the full pool before repeating."""
     images = load_static_images()
     if not images:
         return ""
-    idx = datetime.now().timetuple().tm_yday % len(images)
-    return images[idx]
+    state = _load_state()
+    used = state.get("used_images", [])
+    remaining = [img for img in images if img not in used]
+    if not remaining:
+        used = []
+        remaining = list(images)
+    img = remaining[0]
+    used.append(img)
+    state["used_images"] = used
+    _save_state(state)
+    return img
 
 
 # ── Image Generation (Ideogram v2 Turbo via Replicate) ──────────────────────

@@ -3,5 +3,6 @@
 __pycache__/
 *.pyc
 draft.json
+agent_state.json
 FEATURES_CACHE.md
 venv/

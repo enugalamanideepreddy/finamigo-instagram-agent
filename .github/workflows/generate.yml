@@ -15,6 +15,13 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Restore agent state
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-state
+          path: .
+        continue-on-error: true   # First ever run won't have a saved state
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
@@ -32,6 +39,15 @@ jobs:
           GOOGLE_FORM_PREFILL_PARAM: ${{ secrets.GOOGLE_FORM_PREFILL_PARAM }}
           FEATURES_URL: https://raw.githubusercontent.com/enugalamanideepreddy/FinAmigo/main/FEATURES.md
           GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Save agent state
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-state
+          path: agent_state.json
+          retention-days: 90
+          overwrite: true
+          if-no-files-found: ignore
 
       - name: Upload draft artifact
         uses: actions/upload-artifact@v4
