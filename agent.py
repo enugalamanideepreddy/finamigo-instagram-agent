@@ -75,7 +75,7 @@ def _curl_get(url: str, headers: dict = None, timeout: int = 15) -> dict:
 # ── Gemini Helper ────────────────────────────────────────────────────────────
 
 def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) -> str:
-    """Call Gemini 2.0 Flash and return the text response."""
+    """Call Gemini 2.0 Flash and return the text response. Retries up to 3x on 429."""
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"parts": [{"text": user_msg}]}],
@@ -84,10 +84,18 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
             "maxOutputTokens": max_tokens,
         },
     }
-    data = _curl_post(GEMINI_URL, payload, timeout=30)
-    if "error" in data:
-        raise RuntimeError(f"Gemini error: {data['error']}")
-    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    for attempt in range(3):
+        data = _curl_post(GEMINI_URL, payload, timeout=30)
+        if "error" in data:
+            code = data["error"].get("code") or data["error"].get("status", "")
+            if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
+                wait = 30 * (attempt + 1)
+                print(f"[Gemini] Rate limited (429). Waiting {wait}s before retry {attempt + 1}/3...")
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Gemini error: {data['error']}")
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    raise RuntimeError("Gemini rate limit not resolved after 3 retries.")
 
 
 # ── Features-Grounded System Prompt ──────────────────────────────────────────
@@ -415,18 +423,13 @@ def load_static_images() -> list:
 
 
 def pick_static_image() -> str:
-    """Pick the next unused static image, cycling through the full pool before repeating."""
+    """Pick a random unused static image, cycling through the full pool before repeating."""
     images = load_static_images()
     if not images:
         return ""
     state = _load_state()
     used = state.get("used_images", [])
-    remaining = [img for img in images if img not in used]
-    if not remaining:
-        used = []
-        remaining = list(images)
-    img = remaining[0]
-    used.append(img)
+    img = _pick_random_unused(images, used)
     state["used_images"] = used
     _save_state(state)
     return img
@@ -463,8 +466,12 @@ def generate_image(prompt: str, negative_prompt: str = "") -> str:
         time.sleep(3)
         poll = _curl_get(poll_url, headers=rep_headers, timeout=15)
         if poll["status"] == "succeeded":
-            output = poll["output"]
+            output = poll.get("output")
+            if not output:
+                raise RuntimeError("Ideogram succeeded but returned no output URL.")
             url = output[0] if isinstance(output, list) else output
+            if not url:
+                raise RuntimeError("Ideogram succeeded but output URL is empty.")
             print(f"[Agent] Image ready: {url[:60]}...")
             return url
         if poll["status"] in ("failed", "canceled"):
@@ -476,31 +483,47 @@ def generate_image(prompt: str, negative_prompt: str = "") -> str:
 # ── Instagram Publishing ─────────────────────────────────────────────────────
 
 def _is_url_accessible(url: str) -> bool:
-    """HEAD-check a URL to verify it's still reachable (not expired)."""
+    """Verify a URL serves actual image content (not an expired/JSON error response).
+
+    Uses a unique separator (--CTEND--) between body and content-type so that
+    newlines inside the image binary don't corrupt the parsing.
+    """
+    separator = b"--CTEND--"
     try:
         result = subprocess.run(
-            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--head", "-m", "10", url],
-            capture_output=True, text=True, timeout=15,
+            ["curl", "-s", "-L", "-m", "10", "-w", "--CTEND--%{content_type}",
+             "--range", "0-15", url],
+            capture_output=True, timeout=15,
         )
-        status = result.stdout.strip()
-        return status.startswith("2") or status.startswith("3")
+        if separator not in result.stdout:
+            return False
+        body, ct_bytes = result.stdout.split(separator, 1)
+        content_type = ct_bytes.decode("utf-8", errors="ignore").strip()
+        first_bytes = body[:4]
+        # PNG magic: \x89PNG  |  JPEG magic: \xff\xd8\xff
+        is_image_bytes = first_bytes in (b"\x89PNG", b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1") \
+                         or first_bytes[:3] == b"\xff\xd8\xff"
+        is_image_ct = content_type.startswith("image/")
+        return is_image_bytes or is_image_ct
     except Exception:
         return False
 
 
 def post_to_instagram(caption: str, image_url: str) -> dict:
     """Publish a photo to Instagram via the Graph API."""
+    import urllib.parse
     base = "https://graph.facebook.com/v21.0"
 
-    # Step 1: create media container (use form POST, not JSON body)
-    container_url = f"{base}/{INSTAGRAM_ACCOUNT_ID}/media"
+    # Step 1: create media container.
+    # Pass caption via URL-encoded query param to safely handle newlines and emoji.
+    container_params = urllib.parse.urlencode({
+        "image_url": image_url,
+        "caption": caption,
+        "access_token": INSTAGRAM_ACCESS_TOKEN,
+    })
+    container_url = f"{base}/{INSTAGRAM_ACCOUNT_ID}/media?{container_params}"
     result = subprocess.run(
-        [
-            "curl", "-s", "-m", "30", "-X", "POST", container_url,
-            "-F", f"image_url={image_url}",
-            "-F", f"caption={caption}",
-            "-F", f"access_token={INSTAGRAM_ACCESS_TOKEN}",
-        ],
+        ["curl", "-s", "-m", "30", "-X", "POST", container_url],
         capture_output=True, text=True, timeout=40,
     )
     if result.returncode != 0:
@@ -515,13 +538,13 @@ def post_to_instagram(caption: str, image_url: str) -> dict:
     time.sleep(3)
 
     # Step 2: publish
-    publish_url = f"{base}/{INSTAGRAM_ACCOUNT_ID}/media_publish"
+    publish_params = urllib.parse.urlencode({
+        "creation_id": creation_id,
+        "access_token": INSTAGRAM_ACCESS_TOKEN,
+    })
+    publish_url = f"{base}/{INSTAGRAM_ACCOUNT_ID}/media_publish?{publish_params}"
     result2 = subprocess.run(
-        [
-            "curl", "-s", "-m", "30", "-X", "POST", publish_url,
-            "-F", f"creation_id={creation_id}",
-            "-F", f"access_token={INSTAGRAM_ACCESS_TOKEN}",
-        ],
+        ["curl", "-s", "-m", "30", "-X", "POST", publish_url],
         capture_output=True, text=True, timeout=40,
     )
     if result2.returncode != 0:
@@ -566,21 +589,24 @@ def generate_draft(remarks: Optional[str] = None) -> dict:
     print(f"[Agent] Caption style: {caption_style['name']}")
     print(f"[Agent] Image style: {image_style['name']}")
 
-    # Generate caption with fact-checking (up to 2 retries)
+    # Generate caption with fact-checking (up to 3 attempts total)
     caption = generate_caption(features_text, theme, remarks, caption_style)
-    for attempt in range(2):
+    caption_ok = False
+    for attempt in range(3):
         is_valid, reason = fact_check_caption(features_text, caption)
         if is_valid:
-            print(f"[Agent] Caption passed fact-check.")
+            print(f"[Agent] Caption passed fact-check (attempt {attempt + 1}).")
+            caption_ok = True
             break
         print(f"[Agent] Fact-check FAILED (attempt {attempt + 1}): {reason}")
-        caption = generate_caption(
-            features_text, theme,
-            remarks=f"Previous caption failed fact-check: {reason}. Fix the issues.",
-            caption_style=caption_style,
-        )
-    else:
-        print("[Agent] WARNING: Caption may still have issues after retries.")
+        if attempt < 2:
+            caption = generate_caption(
+                features_text, theme,
+                remarks=f"Previous caption failed fact-check: {reason}. Fix the issues.",
+                caption_style=caption_style,
+            )
+    if not caption_ok:
+        print("[Agent] WARNING: Caption still has issues after 3 attempts — proceeding anyway.")
 
     # Generate image
     image_prompt, negative_prompt = generate_image_prompt(features_text, theme, image_style)
@@ -651,24 +677,33 @@ def run_check() -> None:
         features_text = fetch_features()
         theme = draft["theme"]
 
-        # Regenerate with remarks
-        caption = generate_caption(features_text, theme, remarks)
+        # Preserve the same styles from the original draft
+        caption_style_name = draft.get("caption_style")
+        caption_style = next((s for s in CAPTION_STYLES if s["name"] == caption_style_name), None)
+        image_style_name = draft.get("image_style")
+        image_style = next((s for s in IMAGE_VISUAL_STYLES if s["name"] == image_style_name), None)
+
+        # Regenerate caption with remarks + fact-check
+        caption = generate_caption(features_text, theme, remarks, caption_style)
         is_valid, reason = fact_check_caption(features_text, caption)
         if not is_valid:
             print(f"[Agent] Fact-check issue: {reason} — regenerating...")
             caption = generate_caption(
                 features_text, theme,
                 remarks=f"{remarks}\n\nAlso fix: {reason}",
+                caption_style=caption_style,
             )
 
-        # Generate new image too (theme may have shifted)
-        image_prompt, negative_prompt = generate_image_prompt(features_text, theme)
+        # Generate new image preserving the same composition style
+        image_prompt, negative_prompt = generate_image_prompt(features_text, theme, image_style)
         image_url = generate_image(image_prompt, negative_prompt)
 
         new_draft = {
             "draft_id": generate_draft_id(),
             "date": datetime.now().strftime("%Y-%m-%d"),
             "theme": theme,
+            "caption_style": caption_style_name,
+            "image_style": image_style_name,
             "caption": caption,
             "image_url": image_url,
             "image_prompt": image_prompt,
@@ -713,7 +748,8 @@ def run_post_now() -> None:
     print("[Agent] Generating and posting immediately (no approval)...")
     draft = generate_draft()
     save_draft(draft)
-    post_to_instagram(draft["caption"], draft["image_url"])
+    image_url = _ensure_image_url(draft)
+    post_to_instagram(draft["caption"], image_url)
     clear_draft()
     print("[Agent] Done! Post is live.")
 

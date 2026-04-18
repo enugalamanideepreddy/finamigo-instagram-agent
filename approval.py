@@ -52,8 +52,8 @@ def _download_image(url: str) -> Optional[bytes]:
     """Download image bytes from a URL using curl. Returns None on failure."""
     try:
         result = subprocess.run(
-            ["curl", "-s", "-L", "-m", "30", url],
-            capture_output=True, timeout=35,
+            ["curl", "-s", "-L", "-m", "45", url],
+            capture_output=True, timeout=50,
         )
         if result.returncode == 0 and result.stdout:
             return result.stdout
@@ -115,7 +115,7 @@ def send_draft_email(draft: dict) -> None:
 
   <p style="color: #6b7280; font-size: 12px; margin-top: 24px;">
     Draft ID: {draft['draft_id']}<br>
-    Image prompt: {draft.get('image_prompt', 'N/A')[:100]}...
+    Image prompt: {draft.get('image_prompt', 'N/A')[:100]}{"..." if len(draft.get('image_prompt', '')) > 100 else ""}
   </p>
 </body>
 </html>"""
@@ -182,18 +182,23 @@ def check_form_response(draft_id: str) -> Tuple[str, Optional[str]]:
     if not header:
         return ("pending", None)
 
-    # Find column indices (flexible matching)
+    # Find column indices — use word-level matching to avoid false positives
+    # e.g. "post" matching "Post-it notes", or "finamigo" matching unrelated columns
     approve_col = None
     remarks_col = None
     draft_id_col = None
 
+    import re as _re
+    def _words(s: str):
+        return set(_re.split(r"[\s_\-/]+", s.strip().lower()))
+
     for i, col in enumerate(header):
-        col_lower = col.strip().lower()
-        if "approve" in col_lower or "approved" in col_lower or "finamigo" in col_lower or "post" in col_lower:
+        w = _words(col)
+        if w & {"approve", "approved", "approval"}:
             approve_col = i
-        elif "remark" in col_lower or "feedback" in col_lower or "comment" in col_lower:
+        elif w & {"remark", "remarks", "feedback", "comment", "comments"}:
             remarks_col = i
-        elif "draft" in col_lower and "id" in col_lower:
+        elif "draft" in w and ("id" in w or "ids" in w):
             draft_id_col = i
 
     if approve_col is None:
