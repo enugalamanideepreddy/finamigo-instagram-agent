@@ -11,6 +11,7 @@ Modes:
 
 import json
 import os
+import random
 import subprocess
 import sys
 import tempfile
@@ -132,6 +133,132 @@ THEME_POOL = [
     "Your phone, your data, your rules. Privacy-first finance.",
 ]
 
+# Caption styles — determines the structural format / hook type for each post
+CAPTION_STYLES = [
+    {
+        "name": "bold_statement",
+        "instruction": (
+            "Open with a bold, provocative one-liner statement (no question). "
+            "Follow with 2 punchy benefit lines. End with CTA."
+        ),
+    },
+    {
+        "name": "question_hook",
+        "instruction": (
+            "Open with a short rhetorical question that calls out a common money pain point. "
+            "Answer it in 2 lines with what FinAmigo does. End with CTA."
+        ),
+    },
+    {
+        "name": "stat_lead",
+        "instruction": (
+            "Open with a specific, concrete fact or number from the Feature Reference "
+            "(e.g., supported banks, score range, transaction categories). "
+            "Frame it as a surprising insight. 2 follow-up benefit lines. End with CTA."
+        ),
+    },
+    {
+        "name": "story_moment",
+        "instruction": (
+            "Paint a 1-sentence relatable financial scenario (salary day, bill shock, month-end). "
+            "Then show how FinAmigo resolves it in 2 lines. End with CTA."
+        ),
+    },
+    {
+        "name": "contrast",
+        "instruction": (
+            "Use a 'before vs after' or 'without vs with FinAmigo' contrast structure. "
+            "2 lines of contrast, 1 punch line. End with CTA."
+        ),
+    },
+]
+
+# Image composition styles — each defines a completely different visual layout/structure.
+# These go far beyond just changing colors; the composition, framing, and render style all differ.
+IMAGE_VISUAL_STYLES = [
+    {
+        "name": "phone_hero_dark",
+        "template": (
+            "Professional 3D app marketing render. A single premium smartphone centered and floating "
+            "at a slight 15-degree angle against a deep charcoal to midnight black gradient. "
+            "The phone screen glows with a clean fintech app interface showing colorful {screen_detail}. "
+            "Translucent glassmorphism stat cards float beside the phone. "
+            "Electric blue and violet neon rim lighting, subtle bokeh particles. "
+            "Ultra clean premium tech product photography."
+        ),
+    },
+    {
+        "name": "dual_screen_split",
+        "template": (
+            "Premium app marketing visual. Two smartphones side by side, slightly angled toward each other, "
+            "against a soft white to pale sky blue gradient. "
+            "Left screen shows {screen_detail}, right screen shows a summary dashboard. "
+            "Clean drop shadows, teal and coral accent highlights. "
+            "Flat-minimal product photography style, crisp and editorial."
+        ),
+    },
+    {
+        "name": "ui_cards_floating",
+        "template": (
+            "Abstract fintech app marketing artwork. NO phone frame — only floating UI cards "
+            "arranged in a dynamic staggered layout against a warm sunset gradient from deep orange to magenta. "
+            "Cards display {screen_detail}. Each card has glassmorphism effect with frosted transparency. "
+            "Golden yellow highlights, soft ambient glow, micro-shadow depth. "
+            "Modern editorial design style, ultra-clean."
+        ),
+    },
+    {
+        "name": "isometric_3d",
+        "template": (
+            "Isometric 3D app marketing illustration. A premium smartphone rendered from a 45-degree top-down "
+            "isometric angle against a deep forest green to emerald gradient. "
+            "The screen displays {screen_detail} in crisp detail. "
+            "Flat isometric style with subtle 3D extrusion depth. Lime green and white accents. "
+            "Clean vector-style product render, no photo-realism."
+        ),
+    },
+    {
+        "name": "ui_closeup_immersive",
+        "template": (
+            "Immersive app UI close-up render. The entire frame is filled with a zoomed-in view of "
+            "a fintech app screen showing {screen_detail}, with a dark navy to electric blue vignette background bleeding from the edges. "
+            "No phone frame visible — just the glowing app interface. "
+            "Floating micro data chips and sparkline graphs around the edges. "
+            "Cinematic depth-of-field, premium digital art style."
+        ),
+    },
+    {
+        "name": "minimal_light_flat",
+        "template": (
+            "Minimalist flat app marketing render. A smartphone lying at a slight angle on a pure white "
+            "to soft lavender gradient background. "
+            "The screen shows {screen_detail}. "
+            "Very clean, lots of breathing room, thin geometric line accents in teal. "
+            "No lens flare, no bokeh — editorial Swiss design aesthetic."
+        ),
+    },
+    {
+        "name": "neon_cyberpunk",
+        "template": (
+            "High-energy fintech app marketing visual. A smartphone floating dramatically against a deep "
+            "midnight purple to hot pink gradient. The screen blazes with {screen_detail}. "
+            "Intense neon pink and cyan glow halos, light streaks, lens flares. "
+            "Futuristic cyberpunk aesthetic with glassmorphism cards. "
+            "Bold, high-contrast, Instagram-stopping visual."
+        ),
+    },
+    {
+        "name": "perspective_tilt",
+        "template": (
+            "Dynamic perspective app marketing render. A premium smartphone shot from a dramatic low-angle "
+            "perspective, tilted at 30 degrees, against a rich deep teal to dark navy gradient. "
+            "The screen shows {screen_detail} in vivid color. "
+            "Long dramatic shadow cast behind the phone. Cinematic lighting from above. "
+            "Silver chrome bezel detail, studio product photography style."
+        ),
+    },
+]
+
 
 _STATE_PATH = os.path.join(os.path.dirname(__file__), "agent_state.json")
 
@@ -139,27 +266,58 @@ def _load_state() -> dict:
     if os.path.exists(_STATE_PATH):
         with open(_STATE_PATH) as f:
             return json.load(f)
-    return {"used_themes": [], "used_images": []}
+    return {"used_themes": [], "used_images": [], "used_caption_styles": [], "used_image_styles": []}
 
 def _save_state(state: dict) -> None:
     with open(_STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
 
 
+def _pick_random_unused(pool: list, used: list, key: str = None) -> any:
+    """Pick a random item from pool that hasn't been used yet.
+    Once all items are used, resets and starts a fresh random cycle.
+    key: if set, compare used list against item[key] instead of the item itself.
+    """
+    def item_id(x):
+        return x[key] if key else x
+
+    remaining = [x for x in pool if item_id(x) not in used]
+    if not remaining:
+        used.clear()
+        remaining = list(pool)
+    choice = random.choice(remaining)
+    used.append(item_id(choice))
+    return choice
+
+
 def pick_theme() -> str:
-    """Pick the next unused theme, cycling through the full pool before repeating."""
+    """Pick a random unused theme. Resets once all 12 are exhausted."""
     state = _load_state()
     used = state.get("used_themes", [])
-    remaining = [t for t in THEME_POOL if t not in used]
-    if not remaining:
-        # Full cycle complete — reset and start again
-        used = []
-        remaining = list(THEME_POOL)
-    theme = remaining[0]
-    used.append(theme)
+    theme = _pick_random_unused(THEME_POOL, used)
     state["used_themes"] = used
     _save_state(state)
     return theme
+
+
+def pick_caption_style() -> dict:
+    """Pick a random unused caption style. Resets once all 5 are exhausted."""
+    state = _load_state()
+    used = state.get("used_caption_styles", [])
+    style = _pick_random_unused(CAPTION_STYLES, used, key="name")
+    state["used_caption_styles"] = used
+    _save_state(state)
+    return style
+
+
+def pick_image_style() -> dict:
+    """Pick a random unused image composition style. Resets once all 8 are exhausted."""
+    state = _load_state()
+    used = state.get("used_image_styles", [])
+    style = _pick_random_unused(IMAGE_VISUAL_STYLES, used, key="name")
+    state["used_image_styles"] = used
+    _save_state(state)
+    return style
 
 
 # ── Content Generation ───────────────────────────────────────────────────────
@@ -167,14 +325,25 @@ def pick_theme() -> str:
 from typing import Union, Optional, List, Dict
 
 # ... in agent.py
-def generate_caption(features_text: str, theme: str, remarks: Optional[str] = None) -> str:
+def generate_caption(
+    features_text: str,
+    theme: str,
+    remarks: Optional[str] = None,
+    caption_style: Optional[dict] = None,
+) -> str:
     """Use Gemini to write an Instagram caption grounded in FEATURES.md."""
+    style_instruction = (
+        caption_style["instruction"]
+        if caption_style
+        else "Open with a bold hook that stops the scroll. 2–3 benefit lines. End with CTA."
+    )
     user_msg = (
         f"Write an Instagram caption for FinAmigo.\n\n"
         f"Today's theme/angle: {theme}\n\n"
+        f"POST FORMAT — follow this structure exactly:\n"
+        f"{style_instruction}\n\n"
         f"Rules:\n"
         f"- MAX 40–60 words in the body. Short. Punchy. No fluff.\n"
-        f"- Bold first line that stops the scroll\n"
         f"- Talk about BENEFITS, not technical details\n"
         f"- NO engineering jargon (no parsers, algorithms, thresholds, CVs, rules count)\n"
         f"- Write like CRED or Apple — minimal, impactful\n"
@@ -209,8 +378,8 @@ def fact_check_caption(features_text: str, caption: str) -> tuple[bool, str]:
     return (False, text)
 
 
-def generate_image_prompt(features_text: str, theme: str) -> str:
-    """Build a strict app-marketing image prompt. Gemini only picks screen UI details."""
+def generate_image_prompt(features_text: str, theme: str, image_style: Optional[dict] = None) -> str:
+    """Build a composition-specific image prompt. Gemini picks UI screen details; style picks the layout."""
     system = (
         "You write ONE short sentence (max 15 words) describing what a finance app screen shows. "
         "Examples: 'score dial at 720 with expense pie chart' or "
@@ -220,14 +389,9 @@ def generate_image_prompt(features_text: str, theme: str) -> str:
     user_msg = f"Theme: {theme}\nDescribe the app screen UI in one short sentence."
     screen_detail = gemini_generate(system, user_msg, max_tokens=60)
 
-    prompt = (
-        f"Professional 3D app marketing render. A premium smartphone floating at a slight angle "
-        f"against a smooth gradient background from dark navy blue to bright sky blue. "
-        f"The phone screen glows with a clean fintech app interface showing colorful {screen_detail}. "
-        f"Translucent glassmorphism cards with pie charts and bar graphs float beside the phone. "
-        f"Soft neon blue glow effects, bokeh light particles. "
-        f"Ultra clean, minimal, premium tech product photography style."
-    )
+    # Fall back to phone_hero_dark if no style passed
+    style = image_style or IMAGE_VISUAL_STYLES[0]
+    prompt = style["template"].format(screen_detail=screen_detail)
 
     negative = (
         "text, words, letters, numbers, labels, typography, writing, watermark, signature, "
@@ -311,32 +475,62 @@ def generate_image(prompt: str, negative_prompt: str = "") -> str:
 
 # ── Instagram Publishing ─────────────────────────────────────────────────────
 
+def _is_url_accessible(url: str) -> bool:
+    """HEAD-check a URL to verify it's still reachable (not expired)."""
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--head", "-m", "10", url],
+            capture_output=True, text=True, timeout=15,
+        )
+        status = result.stdout.strip()
+        return status.startswith("2") or status.startswith("3")
+    except Exception:
+        return False
+
+
 def post_to_instagram(caption: str, image_url: str) -> dict:
     """Publish a photo to Instagram via the Graph API."""
-    import urllib.parse
     base = "https://graph.facebook.com/v21.0"
 
-    # Step 1: create media container
-    params = urllib.parse.urlencode({
-        "image_url": image_url, "caption": caption, "access_token": INSTAGRAM_ACCESS_TOKEN
-    })
-    url = f"{base}/{INSTAGRAM_ACCOUNT_ID}/media?{params}"
-    data = _curl_post(url, {}, timeout=30)
+    # Step 1: create media container (use form POST, not JSON body)
+    container_url = f"{base}/{INSTAGRAM_ACCOUNT_ID}/media"
+    result = subprocess.run(
+        [
+            "curl", "-s", "-m", "30", "-X", "POST", container_url,
+            "-F", f"image_url={image_url}",
+            "-F", f"caption={caption}",
+            "-F", f"access_token={INSTAGRAM_ACCESS_TOKEN}",
+        ],
+        capture_output=True, text=True, timeout=40,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"curl failed: {result.stderr}")
+    data = json.loads(result.stdout)
     if "error" in data:
-        raise RuntimeError(f"Container error: {data['error']}")
+        raise RuntimeError(f"Container error: {data['error']['message']} (code {data['error'].get('code')})")
     creation_id = data["id"]
     print(f"[Agent] Container created: {creation_id}")
 
+    # Small delay before publishing (Meta recommends waiting after container creation)
+    time.sleep(3)
+
     # Step 2: publish
-    params2 = urllib.parse.urlencode({
-        "creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN
-    })
-    url2 = f"{base}/{INSTAGRAM_ACCOUNT_ID}/media_publish?{params2}"
-    result = _curl_post(url2, {}, timeout=30)
-    if "error" in result:
-        raise RuntimeError(f"Publish error: {result['error']}")
-    print(f"[Agent] Published! Post ID: {result.get('id')}")
-    return result
+    publish_url = f"{base}/{INSTAGRAM_ACCOUNT_ID}/media_publish"
+    result2 = subprocess.run(
+        [
+            "curl", "-s", "-m", "30", "-X", "POST", publish_url,
+            "-F", f"creation_id={creation_id}",
+            "-F", f"access_token={INSTAGRAM_ACCESS_TOKEN}",
+        ],
+        capture_output=True, text=True, timeout=40,
+    )
+    if result2.returncode != 0:
+        raise RuntimeError(f"curl failed: {result2.stderr}")
+    pub_data = json.loads(result2.stdout)
+    if "error" in pub_data:
+        raise RuntimeError(f"Publish error: {pub_data['error']['message']} (code {pub_data['error'].get('code')})")
+    print(f"[Agent] Published! Post ID: {pub_data.get('id')}")
+    return pub_data
 
 
 # ── Draft Storage ────────────────────────────────────────────────────────────
@@ -363,13 +557,17 @@ def clear_draft() -> None:
 # ── Main Workflows ───────────────────────────────────────────────────────────
 
 def generate_draft(remarks: Optional[str] = None) -> dict:
-    """Generate a complete post draft (caption + image)."""
+    """Generate a complete post draft (caption + image) with style variation."""
     features_text = fetch_features()
     theme = pick_theme()
+    caption_style = pick_caption_style()
+    image_style = pick_image_style()
     print(f"\n[Agent] Theme: {theme}")
+    print(f"[Agent] Caption style: {caption_style['name']}")
+    print(f"[Agent] Image style: {image_style['name']}")
 
     # Generate caption with fact-checking (up to 2 retries)
-    caption = generate_caption(features_text, theme, remarks)
+    caption = generate_caption(features_text, theme, remarks, caption_style)
     for attempt in range(2):
         is_valid, reason = fact_check_caption(features_text, caption)
         if is_valid:
@@ -379,18 +577,21 @@ def generate_draft(remarks: Optional[str] = None) -> dict:
         caption = generate_caption(
             features_text, theme,
             remarks=f"Previous caption failed fact-check: {reason}. Fix the issues.",
+            caption_style=caption_style,
         )
     else:
         print("[Agent] WARNING: Caption may still have issues after retries.")
 
     # Generate image
-    image_prompt, negative_prompt = generate_image_prompt(features_text, theme)
+    image_prompt, negative_prompt = generate_image_prompt(features_text, theme, image_style)
     image_url = generate_image(image_prompt, negative_prompt)
 
     draft = {
         "draft_id": generate_draft_id(),
         "date": datetime.now().strftime("%Y-%m-%d"),
         "theme": theme,
+        "caption_style": caption_style["name"],
+        "image_style": image_style["name"],
         "caption": caption,
         "image_url": image_url,
         "image_prompt": image_prompt,
@@ -411,6 +612,24 @@ def run_generate() -> None:
     print("[Agent] Draft generated and sent for approval.")
 
 
+def _ensure_image_url(draft: dict) -> str:
+    """Return the image URL from the draft, re-generating if it has expired."""
+    url = draft["image_url"]
+    if _is_url_accessible(url):
+        return url
+    print(f"[Agent] Image URL expired or unreachable. Re-generating image...")
+    features_text = fetch_features()
+    theme = draft["theme"]
+    image_style_name = draft.get("image_style")
+    image_style = next((s for s in IMAGE_VISUAL_STYLES if s["name"] == image_style_name), None)
+    image_prompt, negative_prompt = generate_image_prompt(features_text, theme, image_style)
+    new_url = generate_image(image_prompt, negative_prompt)
+    draft["image_url"] = new_url
+    draft["image_prompt"] = image_prompt
+    save_draft(draft)
+    return new_url
+
+
 def run_check() -> None:
     """Check for approval response and act accordingly."""
     draft = load_draft()
@@ -422,7 +641,8 @@ def run_check() -> None:
 
     if status == "approved":
         print("[Agent] Posting approved draft to Instagram...")
-        post_to_instagram(draft["caption"], draft["image_url"])
+        image_url = _ensure_image_url(draft)
+        post_to_instagram(draft["caption"], image_url)
         clear_draft()
         print("[Agent] Done! Post is live.")
 
@@ -482,9 +702,20 @@ def run_approve_local() -> None:
         print("[Agent] No pending draft found in draft.json.")
         return
     print(f"[Agent] Manually approving and posting Draft {draft['draft_id']}...")
-    post_to_instagram(draft["caption"], draft["image_url"])
+    image_url = _ensure_image_url(draft)
+    post_to_instagram(draft["caption"], image_url)
     clear_draft()
     print("[Agent] Done! Published.")
+
+
+def run_post_now() -> None:
+    """Generate a new draft and post it immediately — no approval step."""
+    print("[Agent] Generating and posting immediately (no approval)...")
+    draft = generate_draft()
+    save_draft(draft)
+    post_to_instagram(draft["caption"], draft["image_url"])
+    clear_draft()
+    print("[Agent] Done! Post is live.")
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

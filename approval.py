@@ -15,6 +15,7 @@ import smtplib
 import subprocess
 import uuid
 import time
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from urllib.parse import quote
@@ -47,8 +48,22 @@ def build_form_url(draft_id: str) -> str:
     return f"{GOOGLE_FORM_URL}?{prefill_param}={quote(draft_id)}"
 
 
+def _download_image(url: str) -> Optional[bytes]:
+    """Download image bytes from a URL using curl. Returns None on failure."""
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "-L", "-m", "30", url],
+            capture_output=True, timeout=35,
+        )
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
+    except Exception as e:
+        print(f"[Approval] Image download failed: {e}")
+    return None
+
+
 def send_draft_email(draft: dict) -> None:
-    """Send an HTML email with the draft caption, image preview, and form link."""
+    """Send an HTML email with the draft caption, image embedded inline, and form link."""
     if not all([AGENT_EMAIL, AGENT_EMAIL_PASSWORD, APPROVAL_EMAIL]):
         print("[Approval] Email credentials not configured — skipping email.")
         print(f"[Approval] Draft ID: {draft['draft_id']}")
@@ -61,12 +76,20 @@ def send_draft_email(draft: dict) -> None:
     if attempt > 1:
         subject += f" (Revision #{attempt})"
 
+    # Try to download and inline the image so it always shows regardless of email client settings
+    image_bytes = _download_image(draft["image_url"])
+    use_inline = image_bytes is not None
+    img_src = "cid:preview_image" if use_inline else draft["image_url"]
+    if not use_inline:
+        print(f"[Approval] Could not download image — falling back to external URL in email.")
+
     html = f"""\
 <html>
 <body style="font-family: -apple-system, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
   <h2 style="color: #0d9488;">FinAmigo Instagram Post Draft</h2>
   <p><strong>Date:</strong> {draft['date']}</p>
   <p><strong>Theme:</strong> {draft.get('theme', 'N/A')}</p>
+  <p><strong>Caption style:</strong> {draft.get('caption_style', 'N/A')} &nbsp;|&nbsp; <strong>Image style:</strong> {draft.get('image_style', 'N/A')}</p>
   {"<p><strong>Attempt:</strong> #" + str(attempt) + "</p>" if attempt > 1 else ""}
 
   <hr style="border: 1px solid #e5e7eb;">
@@ -77,8 +100,8 @@ def send_draft_email(draft: dict) -> None:
   </div>
 
   <h3>Image Preview</h3>
-  <p><a href="{draft['image_url']}" style="color: #0d9488;">View Generated Image</a></p>
-  <img src="{draft['image_url']}" alt="Generated post image" style="max-width: 400px; border-radius: 8px; border: 1px solid #e5e7eb;">
+  <img src="{img_src}" alt="Generated post image" style="max-width: 400px; border-radius: 8px; border: 1px solid #e5e7eb; display: block; margin-bottom: 8px;">
+  <p style="margin-top: 6px;"><a href="{draft['image_url']}" style="color: #0d9488; font-size: 13px;">↗ Open full image in browser</a></p>
 
   <hr style="border: 1px solid #e5e7eb;">
 
@@ -97,17 +120,28 @@ def send_draft_email(draft: dict) -> None:
 </body>
 </html>"""
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = AGENT_EMAIL
-    msg["To"] = APPROVAL_EMAIL
-    msg.attach(MIMEText(html, "html"))
+    # Build a multipart/related message so the inline CID image is part of the email body
+    msg_outer = MIMEMultipart("mixed")
+    msg_outer["Subject"] = subject
+    msg_outer["From"] = AGENT_EMAIL
+    msg_outer["To"] = APPROVAL_EMAIL
+
+    msg_related = MIMEMultipart("related")
+    msg_related.attach(MIMEText(html, "html"))
+
+    if use_inline:
+        img_part = MIMEImage(image_bytes)
+        img_part.add_header("Content-ID", "<preview_image>")
+        img_part.add_header("Content-Disposition", "inline", filename="preview.png")
+        msg_related.attach(img_part)
+
+    msg_outer.attach(msg_related)
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(AGENT_EMAIL, AGENT_EMAIL_PASSWORD)
-            server.sendmail(AGENT_EMAIL, APPROVAL_EMAIL, msg.as_string())
-        print(f"[Approval] Draft email sent to {APPROVAL_EMAIL}")
+            server.sendmail(AGENT_EMAIL, APPROVAL_EMAIL, msg_outer.as_string())
+        print(f"[Approval] Draft email sent to {APPROVAL_EMAIL} {'(image embedded inline)' if use_inline else '(image as external link)'}")
     except Exception as e:
         print(f"[Approval] Email send failed: {e}")
         print(f"[Approval] Form URL (manual): {form_url}")

@@ -1,0 +1,41 @@
+name: Update FEATURES_CACHE.md
+
+on:
+  repository_dispatch:
+    types: [features-updated]   # Triggered by the FinAmigo Flutter repo on push to main
+  workflow_dispatch:             # Also allows manual trigger from GitHub Actions UI
+
+jobs:
+  update-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout instagram agent repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}   # Needed so the commit push is authenticated
+
+      - name: Fetch latest FEATURES.md from FinAmigo repo
+        run: |
+          echo "Fetching FEATURES.md from FinAmigo main branch..."
+          curl -s -f -m 20 \
+            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            "https://raw.githubusercontent.com/enugalamanideepreddy/FinAmigo/main/FEATURES.md" \
+            -o FEATURES_CACHE.md
+          echo "Done. $(wc -c < FEATURES_CACHE.md) bytes fetched."
+
+      - name: Commit updated cache if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet FEATURES_CACHE.md; then
+            echo "FEATURES_CACHE.md is already up to date — no commit needed."
+          else
+            git add FEATURES_CACHE.md
+            git commit -m "chore: sync FEATURES_CACHE.md from FinAmigo main
+
+Triggered by push to enugalamanideepreddy/FinAmigo@${{ github.event.client_payload.sha || 'manual' }}
+Pusher: ${{ github.event.client_payload.pusher || 'manual trigger' }}"
+            git push
+            echo "FEATURES_CACHE.md updated and pushed."
+          fi
