@@ -86,19 +86,25 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
         "contents": [{"parts": [{"text": user_msg}]}],
         "generationConfig": {"temperature": 0.9, "maxOutputTokens": max_tokens},
     }
-    for attempt in range(3):
-        r = req.post(GEMINI_URL, json=payload, timeout=40)
-        data = r.json()
+    for attempt in range(4):
+        try:
+            r = req.post(GEMINI_URL, json=payload, timeout=90)
+            data = r.json()
+        except req.exceptions.Timeout:
+            wait = 20 * (attempt + 1)
+            print(f"[Gemini] Timeout on attempt {attempt+1}/4. Waiting {wait}s before retry...")
+            time.sleep(wait)
+            continue
         if "error" in data:
             code = data["error"].get("code") or data["error"].get("status", "")
             if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
                 wait = 30 * (attempt + 1)
-                print(f"[Gemini] Rate limited. Waiting {wait}s (retry {attempt+1}/3)...")
+                print(f"[Gemini] Rate limited. Waiting {wait}s (retry {attempt+1}/4)...")
                 time.sleep(wait)
                 continue
             raise RuntimeError(f"Gemini error: {data['error']}")
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    raise RuntimeError("Gemini rate limit not resolved after 3 retries.")
+    raise RuntimeError("Gemini failed after 4 retries (timeout or rate limit).")
 
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
