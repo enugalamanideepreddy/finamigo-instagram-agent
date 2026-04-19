@@ -11,20 +11,27 @@ Setup:
   - Create a bot via @BotFather → copy the token → GitHub secret: TELEGRAM_BOT_TOKEN
   - Send any message to your new bot, then visit:
       https://api.telegram.org/bot<TOKEN>/getUpdates
-    Copy the "chat" → "id" value → GitHub secret: TELEGRAM_CHAT_ID
+    Copy the "chat" → "id" value → GitHub secret: TELEGRAM__chat_id()
 """
 
 import os
 from typing import Optional, Tuple
 import requests
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
-_BASE     = f"https://api.telegram.org/bot{BOT_TOKEN}"
+def _token() -> str:
+    return os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
+def _chat_id() -> str:
+    return os.environ.get("TELEGRAM__chat_id()", "")
+
+def _base() -> str:
+    return f"https://api.telegram.org/bot{_token()}"
 
 def _configured() -> bool:
-    return bool(BOT_TOKEN and CHAT_ID)
+    ok = bool(_token() and _chat_id())
+    if not ok:
+        print(f"[Telegram] Not configured — BOT_TOKEN={'set' if _token() else 'MISSING'}, _chat_id()={'set' if _chat_id() else 'MISSING'}")
+    return ok
 
 
 def send_draft(draft: dict, image_url: str) -> Optional[int]:
@@ -58,8 +65,8 @@ def send_draft(draft: dict, image_url: str) -> Optional[int]:
 
     # Try sending as a photo first; fall back to text+link if image URL fails
     try:
-        r = requests.post(f"{_BASE}/sendPhoto", json={
-            "chat_id":      CHAT_ID,
+        r = requests.post(f"{_base()}/sendPhoto", json={
+            "chat_id":      _chat_id(),
             "photo":        image_url,
             "caption":      text,
             "parse_mode":   "Markdown",
@@ -76,8 +83,8 @@ def send_draft(draft: dict, image_url: str) -> Optional[int]:
 
     # Fallback: text message with clickable image link
     try:
-        r2 = requests.post(f"{_BASE}/sendMessage", json={
-            "chat_id":      CHAT_ID,
+        r2 = requests.post(f"{_base()}/sendMessage", json={
+            "chat_id":      _chat_id(),
             "text":         text + f"\n\n🖼️ [View Image]({image_url})",
             "parse_mode":   "Markdown",
             "reply_markup": keyboard,
@@ -114,7 +121,7 @@ def check_response(
         return ("pending", None, offset, awaiting_remarks)
 
     try:
-        r = requests.get(f"{_BASE}/getUpdates", params={
+        r = requests.get(f"{_base()}/getUpdates", params={
             "offset":  offset,
             "timeout": 0,
             "limit":   100,
@@ -140,7 +147,7 @@ def check_response(
         if "callback_query" in update:
             cq = update["callback_query"]
             from_chat = str(cq["message"]["chat"]["id"])
-            if from_chat != str(CHAT_ID):
+            if from_chat != str(_chat_id()):
                 continue
 
             cb_data = cq.get("data", "")
@@ -153,7 +160,7 @@ def check_response(
 
             # Acknowledge the button press (removes loading spinner in Telegram)
             try:
-                requests.post(f"{_BASE}/answerCallbackQuery", json={
+                requests.post(f"{_base()}/answerCallbackQuery", json={
                     "callback_query_id": cq["id"],
                     "text": "Got it!" if action == "approve" else "Send your notes as a reply.",
                 }, timeout=10)
@@ -167,8 +174,8 @@ def check_response(
                 awaiting_remarks = True
                 # Prompt user for remarks
                 try:
-                    requests.post(f"{_BASE}/sendMessage", json={
-                        "chat_id":  CHAT_ID,
+                    requests.post(f"{_base()}/sendMessage", json={
+                        "chat_id":  _chat_id(),
                         "text":     "✏️ What should I change? Reply with your revision notes:",
                         "parse_mode": "Markdown",
                     }, timeout=10)
@@ -181,7 +188,7 @@ def check_response(
             from_chat = str(msg.get("chat", {}).get("id", ""))
             text = msg.get("text", "").strip()
 
-            if from_chat != str(CHAT_ID):
+            if from_chat != str(_chat_id()):
                 continue
             if not text or text.startswith("/"):
                 continue
@@ -198,8 +205,8 @@ def notify(message: str) -> None:
     if not _configured():
         return
     try:
-        requests.post(f"{_BASE}/sendMessage", json={
-            "chat_id":    CHAT_ID,
+        requests.post(f"{_base()}/sendMessage", json={
+            "chat_id":    _chat_id(),
             "text":       message,
             "parse_mode": "Markdown",
         }, timeout=15)
