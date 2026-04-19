@@ -28,21 +28,23 @@ jobs:
 
       - name: Update GitHub secret
         uses: actions/github-script@v7
+        env:
+          NEW_TOKEN: ${{ steps.refresh.outputs.new_token }}
         with:
           github-token: ${{ secrets.GH_PAT }}
           script: |
-            const sodium = require('tweetsodium');
+            const sodium = require('libsodium-wrappers');
+            await sodium.ready;
+
             const key = (await github.rest.actions.getRepoPublicKey({
               owner: context.repo.owner,
               repo: context.repo.repo,
             })).data;
 
-            const encrypted = Buffer.from(
-              sodium.seal(
-                Buffer.from('${{ steps.refresh.outputs.new_token }}'),
-                Buffer.from(key.key, 'base64')
-              )
-            ).toString('base64');
+            const binKey = sodium.from_base64(key.key, sodium.base64_variants.ORIGINAL);
+            const binMsg = sodium.from_string(process.env.NEW_TOKEN);
+            const encBytes = sodium.crypto_box_seal(binMsg, binKey);
+            const encrypted = sodium.to_base64(encBytes, sodium.base64_variants.ORIGINAL);
 
             await github.rest.actions.createOrUpdateRepoSecret({
               owner: context.repo.owner,
