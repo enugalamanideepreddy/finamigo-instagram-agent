@@ -19,11 +19,28 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore agent state
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-state
-          path: .
-        continue-on-error: true   # First ever run won't have saved state
+        run: |
+          curl -s -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts?name=agent-state&per_page=1" \
+            | python3 -c "
+          import sys, json, urllib.request, os
+          data = json.load(sys.stdin)
+          arts = data.get('artifacts', [])
+          if not arts:
+              print('No agent-state artifact yet — starting fresh.')
+              sys.exit(0)
+          aid = arts[0]['id']
+          print(f'Downloading agent-state artifact {aid}...')
+          req = urllib.request.Request(
+              f'https://api.github.com/repos/${{ github.repository }}/actions/artifacts/{aid}/zip',
+              headers={'Authorization': 'Bearer ${{ secrets.GITHUB_TOKEN }}', 'Accept': 'application/vnd.github+json'}
+          )
+          with urllib.request.urlopen(req) as resp:
+              open('/tmp/state.zip', 'wb').write(resp.read())
+          " || true
+          [ -f /tmp/state.zip ] && unzip -o /tmp/state.zip -d . || true
 
       - name: Generate draft and send for approval
         run: python agent.py --generate
@@ -59,14 +76,13 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python - <<'EOF'
+          python3 - <<'EOF'
           import os, requests
           token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
           chat  = os.environ.get("TELEGRAM_CHAT_ID", "")
           if token and chat:
               requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
                   "chat_id": chat,
-                  "text": "❌ *Generate workflow failed!* Check GitHub Actions for details.",
-                  "parse_mode": "Markdown",
+                  "text": "❌ Generate workflow failed! Check GitHub Actions for details.",
               }, timeout=10)
           EOF

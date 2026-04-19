@@ -19,11 +19,27 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore agent state
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-state
-          path: .
-        continue-on-error: true   # Fine on first run — agent handles missing state gracefully
+        run: |
+          curl -s -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts?name=agent-state&per_page=1" \
+            | python3 -c "
+          import sys, json, urllib.request
+          data = json.load(sys.stdin)
+          arts = data.get('artifacts', [])
+          if not arts:
+              print('No agent-state artifact yet.')
+              sys.exit(0)
+          aid = arts[0]['id']
+          req = urllib.request.Request(
+              f'https://api.github.com/repos/${{ github.repository }}/actions/artifacts/{aid}/zip',
+              headers={'Authorization': 'Bearer ${{ secrets.GITHUB_TOKEN }}', 'Accept': 'application/vnd.github+json'}
+          )
+          with urllib.request.urlopen(req) as resp:
+              open('/tmp/state.zip', 'wb').write(resp.read())
+          " || true
+          [ -f /tmp/state.zip ] && unzip -o /tmp/state.zip -d . || true
 
       - name: Check Telegram for approval and act
         run: python agent.py --check
