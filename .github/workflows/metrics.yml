@@ -1,0 +1,47 @@
+name: Weekly Engagement Metrics
+
+on:
+  schedule:
+    - cron: '0 5 * * 0'   # Every Sunday at 10:30 AM IST
+  workflow_dispatch:        # Manual trigger
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore agent state
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-state
+          path: .
+        continue-on-error: true
+
+      - name: Fetch Instagram engagement metrics
+        run: python agent.py --metrics
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Save updated agent state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-state
+          path: agent_state.json
+          retention-days: 90
+          overwrite: true
+          if-no-files-found: ignore

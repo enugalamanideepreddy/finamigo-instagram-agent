@@ -3,7 +3,7 @@ name: Generate Twice-Weekly Post Draft
 on:
   schedule:
     - cron: '30 4 * * 3,6'  # 10:00 AM IST — Wednesday & Saturday
-  workflow_dispatch:         # Manual trigger for testing
+  workflow_dispatch:          # Manual trigger
 
 jobs:
   generate:
@@ -15,15 +15,15 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
       - name: Restore agent state
         uses: actions/download-artifact@v4
         with:
           name: agent-state
           path: .
-        continue-on-error: true   # First ever run won't have a saved state
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+        continue-on-error: true   # First ever run won't have saved state
 
       - name: Generate draft and send for approval
         run: python agent.py --generate
@@ -40,8 +40,11 @@ jobs:
           FEATURES_URL: https://raw.githubusercontent.com/enugalamanideepreddy/FinAmigo/main/FEATURES.md
           GH_PAT: ${{ secrets.GH_PAT }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - name: Save agent state
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-state
@@ -50,9 +53,20 @@ jobs:
           overwrite: true
           if-no-files-found: ignore
 
-      - name: Upload draft artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: draft-${{ github.run_id }}
-          path: draft.json
-          retention-days: 2
+      - name: Notify on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'EOF'
+          import os, requests
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+          chat  = os.environ.get("TELEGRAM_CHAT_ID", "")
+          if token and chat:
+              requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
+                  "chat_id": chat,
+                  "text": "❌ *Generate workflow failed!* Check GitHub Actions for details.",
+                  "parse_mode": "Markdown",
+              }, timeout=10)
+          EOF

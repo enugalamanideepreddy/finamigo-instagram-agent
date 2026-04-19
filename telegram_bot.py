@@ -1,0 +1,207 @@
+"""
+Telegram bot for instant draft approval — replaces the Google Form polling loop.
+
+Flow:
+  1. Agent sends draft photo + caption + inline keyboard to your Telegram chat.
+  2. You tap ✅ Approve → post goes live immediately on next check run.
+  3. You tap ✏️ Revise → bot prompts you; reply with revision notes as a text message.
+  4. check_approval polls getUpdates (stateless offset stored in agent_state).
+
+Setup:
+  - Create a bot via @BotFather → copy the token → GitHub secret: TELEGRAM_BOT_TOKEN
+  - Send any message to your new bot, then visit:
+      https://api.telegram.org/bot<TOKEN>/getUpdates
+    Copy the "chat" → "id" value → GitHub secret: TELEGRAM_CHAT_ID
+"""
+
+import os
+from typing import Optional, Tuple
+import requests
+
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+_BASE     = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+
+def _configured() -> bool:
+    return bool(BOT_TOKEN and CHAT_ID)
+
+
+def send_draft(draft: dict, image_url: str) -> Optional[int]:
+    """Send the draft to Telegram as a photo with an inline Approve / Revise keyboard.
+
+    Returns the Telegram message_id so it can be stored in state (optional).
+    """
+    if not _configured():
+        print("[Telegram] Not configured — skipping Telegram notification.")
+        return None
+
+    draft_id = draft["draft_id"]
+    caption_preview = draft["caption"][:900]  # Telegram caption limit is 1024
+
+    text = (
+        f"📸 *New FinAmigo Draft*\n\n"
+        f"*Theme:* {draft.get('theme', '')}\n"
+        f"*Caption style:* {draft.get('caption_style', 'N/A')} · "
+        f"*Image style:* {draft.get('image_style', 'N/A')}\n"
+        f"*Draft ID:* `{draft_id}`\n\n"
+        f"───────────────\n"
+        f"{caption_preview}"
+    )
+
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "✅ Approve", "callback_data": f"approve|{draft_id}"},
+            {"text": "✏️ Revise",  "callback_data": f"revise|{draft_id}"},
+        ]]
+    }
+
+    # Try sending as a photo first; fall back to text+link if image URL fails
+    try:
+        r = requests.post(f"{_BASE}/sendPhoto", json={
+            "chat_id":      CHAT_ID,
+            "photo":        image_url,
+            "caption":      text,
+            "parse_mode":   "Markdown",
+            "reply_markup": keyboard,
+        }, timeout=30)
+        data = r.json()
+        if data.get("ok"):
+            msg_id = data["result"]["message_id"]
+            print(f"[Telegram] Draft sent (photo), message_id={msg_id}")
+            return msg_id
+        print(f"[Telegram] Photo send failed ({data.get('description')}) — falling back to text.")
+    except Exception as e:
+        print(f"[Telegram] Photo send error: {e}")
+
+    # Fallback: text message with clickable image link
+    try:
+        r2 = requests.post(f"{_BASE}/sendMessage", json={
+            "chat_id":      CHAT_ID,
+            "text":         text + f"\n\n🖼️ [View Image]({image_url})",
+            "parse_mode":   "Markdown",
+            "reply_markup": keyboard,
+        }, timeout=20)
+        data2 = r2.json()
+        if data2.get("ok"):
+            msg_id = data2["result"]["message_id"]
+            print(f"[Telegram] Draft sent (text fallback), message_id={msg_id}")
+            return msg_id
+        print(f"[Telegram] Text fallback also failed: {data2}")
+    except Exception as e:
+        print(f"[Telegram] Text fallback error: {e}")
+
+    return None
+
+
+def check_response(
+    draft_id: str,
+    offset: int = 0,
+    awaiting_remarks: bool = False,
+) -> Tuple[str, Optional[str], int, bool]:
+    """Poll Telegram getUpdates for an approval decision.
+
+    Args:
+        draft_id:         The current draft's ID to match against callback data.
+        offset:           Last processed update_id + 1 (persisted in agent_state).
+        awaiting_remarks: True if a revise button was pressed and we're waiting for a text reply.
+
+    Returns:
+        (status, remarks, new_offset, new_awaiting_remarks)
+        status is "approved", "remarks", or "pending".
+    """
+    if not _configured():
+        return ("pending", None, offset, awaiting_remarks)
+
+    try:
+        r = requests.get(f"{_BASE}/getUpdates", params={
+            "offset":  offset,
+            "timeout": 0,
+            "limit":   100,
+        }, timeout=20)
+        data = r.json()
+    except Exception as e:
+        print(f"[Telegram] getUpdates error: {e}")
+        return ("pending", None, offset, awaiting_remarks)
+
+    if not data.get("ok"):
+        print(f"[Telegram] getUpdates failed: {data.get('description')}")
+        return ("pending", None, offset, awaiting_remarks)
+
+    updates = data.get("result", [])
+    new_offset = offset
+    status = "pending"
+    remarks_text = None
+
+    for update in updates:
+        new_offset = max(new_offset, update["update_id"] + 1)
+
+        # ── Inline button press ──────────────────────────────────────────────
+        if "callback_query" in update:
+            cq = update["callback_query"]
+            from_chat = str(cq["message"]["chat"]["id"])
+            if from_chat != str(CHAT_ID):
+                continue
+
+            cb_data = cq.get("data", "")
+            if "|" not in cb_data:
+                continue
+            action, cb_draft_id = cb_data.split("|", 1)
+
+            if cb_draft_id != draft_id:
+                continue
+
+            # Acknowledge the button press (removes loading spinner in Telegram)
+            try:
+                requests.post(f"{_BASE}/answerCallbackQuery", json={
+                    "callback_query_id": cq["id"],
+                    "text": "Got it!" if action == "approve" else "Send your notes as a reply.",
+                }, timeout=10)
+            except Exception:
+                pass
+
+            if action == "approve":
+                status = "approved"
+                awaiting_remarks = False
+            elif action == "revise":
+                awaiting_remarks = True
+                # Prompt user for remarks
+                try:
+                    requests.post(f"{_BASE}/sendMessage", json={
+                        "chat_id":  CHAT_ID,
+                        "text":     "✏️ What should I change? Reply with your revision notes:",
+                        "parse_mode": "Markdown",
+                    }, timeout=10)
+                except Exception:
+                    pass
+
+        # ── Text message (revision notes) ────────────────────────────────────
+        elif "message" in update and awaiting_remarks:
+            msg = update["message"]
+            from_chat = str(msg.get("chat", {}).get("id", ""))
+            text = msg.get("text", "").strip()
+
+            if from_chat != str(CHAT_ID):
+                continue
+            if not text or text.startswith("/"):
+                continue
+
+            status = "remarks"
+            remarks_text = text
+            awaiting_remarks = False
+
+    return (status, remarks_text, new_offset, awaiting_remarks)
+
+
+def notify(message: str) -> None:
+    """Send a plain notification message to the Telegram chat."""
+    if not _configured():
+        return
+    try:
+        requests.post(f"{_BASE}/sendMessage", json={
+            "chat_id":    CHAT_ID,
+            "text":       message,
+            "parse_mode": "Markdown",
+        }, timeout=15)
+    except Exception as e:
+        print(f"[Telegram] Notify error: {e}")
