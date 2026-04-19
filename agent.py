@@ -645,8 +645,13 @@ def run_generate() -> None:
     save_draft(draft, state)
     _save_state(state)
 
+    # Upload image to imgbb now so Telegram gets a stable public URL
+    tg_image_url = upload_composited(draft["image_url"], tagline=draft.get("theme", "")[:60])
+    draft["image_url"] = tg_image_url  # persist stable URL so check_approval doesn't re-upload
+    save_draft(draft, state)
+
     # Primary: Telegram (instant)
-    tg_send(draft, draft["image_url"])
+    tg_send(draft, tg_image_url)
     # Backup: Email (async fallback)
     send_draft_email(draft)
 

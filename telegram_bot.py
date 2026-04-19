@@ -44,14 +44,19 @@ def send_draft(draft: dict, image_url: str) -> Optional[int]:
         return None
 
     draft_id = draft["draft_id"]
-    caption_preview = draft["caption"][:900]  # Telegram caption limit is 1024
+
+    # Use HTML mode — much more forgiving than Markdown (no escaping issues)
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    caption_preview = _esc(draft["caption"][:900])
+    theme_safe      = _esc(draft.get("theme", ""))
 
     text = (
-        f"📸 *New FinAmigo Draft*\n\n"
-        f"*Theme:* {draft.get('theme', '')}\n"
-        f"*Caption style:* {draft.get('caption_style', 'N/A')} · "
-        f"*Image style:* {draft.get('image_style', 'N/A')}\n"
-        f"*Draft ID:* `{draft_id}`\n\n"
+        f"📸 <b>New FinAmigo Draft</b>\n\n"
+        f"<b>Theme:</b> {theme_safe}\n"
+        f"<b>Style:</b> {draft.get('caption_style', 'N/A')} · {draft.get('image_style', 'N/A')}\n"
+        f"<b>Draft ID:</b> <code>{draft_id}</code>\n\n"
         f"───────────────\n"
         f"{caption_preview}"
     )
@@ -63,13 +68,13 @@ def send_draft(draft: dict, image_url: str) -> Optional[int]:
         ]]
     }
 
-    # Try sending as a photo first; fall back to text+link if image URL fails
+    # Try photo first
     try:
         r = requests.post(f"{_base()}/sendPhoto", json={
             "chat_id":      _chat_id(),
             "photo":        image_url,
             "caption":      text,
-            "parse_mode":   "Markdown",
+            "parse_mode":   "HTML",
             "reply_markup": keyboard,
         }, timeout=30)
         data = r.json()
@@ -77,16 +82,15 @@ def send_draft(draft: dict, image_url: str) -> Optional[int]:
             msg_id = data["result"]["message_id"]
             print(f"[Telegram] Draft sent (photo), message_id={msg_id}")
             return msg_id
-        print(f"[Telegram] Photo send failed ({data.get('description')}) — falling back to text.")
+        print(f"[Telegram] Photo send failed: {data.get('description')} — trying text fallback.")
     except Exception as e:
         print(f"[Telegram] Photo send error: {e}")
 
-    # Fallback: text message with clickable image link
+    # Fallback: plain text + image link (no parse_mode to avoid any formatting issues)
     try:
         r2 = requests.post(f"{_base()}/sendMessage", json={
             "chat_id":      _chat_id(),
-            "text":         text + f"\n\n🖼️ [View Image]({image_url})",
-            "parse_mode":   "Markdown",
+            "text":         f"📸 New FinAmigo Draft\nDraft ID: {draft_id}\n\nImage: {image_url}",
             "reply_markup": keyboard,
         }, timeout=20)
         data2 = r2.json()
