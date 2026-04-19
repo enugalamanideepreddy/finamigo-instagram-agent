@@ -28,6 +28,7 @@ from approval import send_draft_email
 from features_loader import fetch_features
 from gist_store import delete_draft_gist, load_draft_from_gist, save_draft_to_gist
 from telegram_bot import check_response as tg_check, notify as tg_notify, send_draft as tg_send
+from image_composer import upload_composited
 import approval as _approval_mod
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -190,91 +191,80 @@ IMAGE_VISUAL_STYLES = [
     {
         "name": "phone_hero_dark",
         "template": (
-            "Professional 3D app marketing poster. A single premium smartphone centered and floating "
+            "Professional 3D app marketing render. A single premium smartphone centered and floating "
             "at a slight 15-degree angle against a deep charcoal to midnight black gradient. "
             "The phone screen glows with a clean fintech app interface showing {screen_detail}. "
             "Translucent glassmorphism stat cards float beside the phone. "
             "Electric blue and violet neon rim lighting, subtle bokeh particles. "
-            "Bold white sans-serif text 'FinAmigo' in top-left corner. "
-            "Clean bold tagline text at the bottom in teal. "
-            "Ultra clean premium tech product photography poster."
+            "No text, no words, no labels anywhere. Ultra clean premium visual only."
         ),
     },
     {
         "name": "dual_screen_split",
         "template": (
-            "Premium app marketing poster. Two smartphones side by side, slightly angled toward each other, "
+            "Premium app marketing visual. Two smartphones side by side, slightly angled toward each other, "
             "against a soft white to pale sky blue gradient. "
             "Left screen shows {screen_detail}, right screen shows a summary dashboard. "
             "Clean drop shadows, teal and coral accent highlights. "
-            "Large bold sans-serif brand name 'FinAmigo' centered at the top in dark charcoal. "
-            "Short punchy tagline in smaller teal text below. "
-            "Flat-minimal editorial design."
+            "No text, no words, no labels. Flat-minimal editorial product photography."
         ),
     },
     {
         "name": "ui_cards_floating",
         "template": (
-            "Abstract fintech marketing poster. NO phone frame — only floating UI cards "
+            "Abstract fintech app marketing artwork. NO phone frame — only floating UI cards "
             "arranged in a dynamic staggered layout against a warm sunset gradient from deep orange to magenta. "
             "Cards display {screen_detail} with glassmorphism frosted effect. "
-            "Large bold white sans-serif text 'FinAmigo' overlaid prominently at top. "
-            "One bold white headline stat or phrase centered in the composition. "
-            "Golden yellow highlights, soft ambient glow, ultra-clean modern design."
+            "Golden yellow highlights, soft ambient glow. "
+            "No text, no words, no labels. Modern editorial design, ultra-clean."
         ),
     },
     {
         "name": "isometric_3d",
         "template": (
-            "Isometric 3D app marketing poster. A premium smartphone rendered from a 45-degree isometric angle "
+            "Isometric 3D app marketing illustration. A premium smartphone from a 45-degree isometric angle "
             "against a deep forest green to emerald gradient. "
             "The screen displays {screen_detail} in crisp detail. "
             "Flat isometric style with subtle 3D depth. Lime green and white accents. "
-            "Bold white sans-serif 'FinAmigo' brand name in top-right. "
-            "Clean bold label text floating near the screen as callouts."
+            "No text, no words, no labels. Clean vector-style product render."
         ),
     },
     {
         "name": "ui_closeup_immersive",
         "template": (
-            "Immersive fintech app marketing poster. The entire frame is filled with a zoomed-in view of "
-            "a fintech app screen showing {screen_detail}, dark navy to electric blue vignette at edges. "
-            "No phone frame visible — just the glowing interface. "
-            "Bold white sans-serif 'FinAmigo' text overlaid at top with a subtle dark blur behind it. "
-            "One large bold stat number or phrase floating center-left as a hero callout. "
-            "Cinematic depth-of-field, premium digital art."
+            "Immersive app UI close-up render. The entire frame filled with a zoomed-in fintech app screen "
+            "showing {screen_detail}, dark navy to electric blue vignette at edges. "
+            "No phone frame visible — just the glowing app interface. "
+            "Floating micro data chips and sparkline graphs. "
+            "No text, no words, no labels. Cinematic depth-of-field, premium digital art."
         ),
     },
     {
         "name": "minimal_light_flat",
         "template": (
-            "Minimalist app marketing poster. A smartphone on a pure white to soft lavender gradient. "
-            "The screen shows {screen_detail}. Lots of breathing room, thin teal geometric line accents. "
-            "Bold dark charcoal sans-serif 'FinAmigo' at top-left, clean and confident. "
-            "One short punchy bold phrase in teal below the phone. "
-            "Swiss editorial design — no flare, no bokeh, purely typographic and clean."
+            "Minimalist flat app marketing render. A smartphone at a slight angle on a pure white "
+            "to soft lavender gradient. The screen shows {screen_detail}. "
+            "Lots of breathing room, thin teal geometric line accents. "
+            "No text, no words, no labels. Swiss editorial aesthetic."
         ),
     },
     {
         "name": "neon_cyberpunk",
         "template": (
-            "High-energy fintech marketing poster. A smartphone floating against a deep midnight purple to "
-            "hot pink gradient. The screen blazes with {screen_detail}. "
-            "Intense neon pink and cyan glow, light streaks, lens flares. "
-            "Large glowing neon-outlined text 'FinAmigo' at the top. "
-            "Bold bright white headline phrase center-bottom with neon glow shadow. "
-            "Bold, high-contrast, Instagram-stopping cyberpunk visual."
+            "High-energy fintech app marketing visual. A smartphone floating against a deep midnight purple "
+            "to hot pink gradient. The screen blazes with {screen_detail}. "
+            "Intense neon pink and cyan glow halos, light streaks, lens flares. "
+            "No text, no words, no labels. Bold high-contrast cyberpunk aesthetic."
         ),
     },
     {
         "name": "perspective_tilt",
         "template": (
-            "Dynamic perspective app marketing poster. A premium smartphone tilted at 30 degrees from a "
+            "Dynamic perspective app marketing render. A premium smartphone tilted at 30 degrees from a "
             "dramatic low angle against a rich deep teal to dark navy gradient. "
             "The screen shows {screen_detail} in vivid color. "
-            "Long dramatic shadow cast behind the phone. Cinematic studio lighting from above. "
-            "Bold white sans-serif 'FinAmigo' top-right. "
-            "Short bold white tagline text at the bottom-left. Chrome bezel detail."
+            "Long dramatic shadow, cinematic studio lighting from above. Chrome bezel detail. "
+            "No text, no words, no labels. Studio product photography style."
         ),
     },
 ]
@@ -490,32 +480,9 @@ def _is_url_image(url: str) -> bool:
         return False
 
 
-def _rehost_image(url: str) -> str:
-    """Upload image to imgbb for a stable public URL Instagram can always reach."""
-    if not IMGBB_API_KEY:
-        print("[Agent] No IMGBB_API_KEY — using original URL.")
-        return url
-    print("[Agent] Uploading image to imgbb...")
-    try:
-        img_bytes = req.get(url, timeout=60).content
-        r = req.post(
-            f"https://api.imgbb.com/1/upload?key={IMGBB_API_KEY}",
-            files={"image": img_bytes},
-            timeout=40,
-        )
-        data = r.json()
-        if data.get("success"):
-            hosted = data["data"]["url"]
-            print(f"[Agent] imgbb URL: {hosted[:60]}...")
-            return hosted
-        raise RuntimeError(f"imgbb error: {data}")
-    except Exception as e:
-        print(f"[Agent] imgbb upload failed ({e}) — using original URL.")
-        return url
-
 
 def _ensure_image_url(draft: dict, state: dict) -> str:
-    """Return a stable public URL. Re-generate if expired; always re-host via imgbb."""
+    """Return a composited, stable public URL ready for Instagram."""
     url = draft["image_url"]
     if not _is_url_image(url):
         print("[Agent] Image URL expired — re-generating...")
@@ -528,7 +495,9 @@ def _ensure_image_url(draft: dict, state: dict) -> str:
         url = generate_image(image_prompt, neg, state=state)
         draft["image_url"] = url
         draft["image_prompt"] = image_prompt
-    return _rehost_image(url)
+    # Composite FinAmigo branding (crisp Pillow text) then upload to imgbb
+    tagline = draft.get("theme", "")[:60]
+    return upload_composited(url, tagline=tagline)
 
 
 # ── Instagram Publishing ──────────────────────────────────────────────────────
