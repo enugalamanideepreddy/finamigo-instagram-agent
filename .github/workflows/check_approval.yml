@@ -59,6 +59,7 @@ jobs:
           GOOGLE_SHEET_CSV_URL: ${{ secrets.GOOGLE_SHEET_CSV_URL }}
           FEATURES_URL: https://raw.githubusercontent.com/enugalamanideepreddy/FinAmigo/main/FEATURES.md
           GH_PAT: ${{ secrets.GH_PAT }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
 
       - name: Upload updated draft (if regenerated)
         if: always()

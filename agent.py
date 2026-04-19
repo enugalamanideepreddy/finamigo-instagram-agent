@@ -35,6 +35,7 @@ INSTAGRAM_ACCESS_TOKEN = os.environ["INSTAGRAM_ACCESS_TOKEN"]
 INSTAGRAM_ACCOUNT_ID   = os.environ["INSTAGRAM_ACCOUNT_ID"]
 
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY", "")
 
 DRAFT_PATH = os.path.join(os.path.dirname(__file__), "draft.json")
 
@@ -638,22 +639,68 @@ def run_generate() -> None:
     print("[Agent] Draft generated and sent for approval.")
 
 
-def _ensure_image_url(draft: dict) -> str:
-    """Return the image URL from the draft, re-generating if it has expired."""
-    url = draft["image_url"]
-    if _is_url_accessible(url):
+def _rehost_image(url: str) -> str:
+    """Download image and upload to imgbb for a stable public URL Instagram can access.
+
+    Falls back to the original URL if imgbb key is missing or upload fails.
+    """
+    if not IMGBB_API_KEY:
+        print("[Agent] No IMGBB_API_KEY set — using original URL (may fail on Instagram).")
         return url
-    print(f"[Agent] Image URL expired or unreachable. Re-generating image...")
-    features_text = fetch_features()
-    theme = draft["theme"]
-    image_style_name = draft.get("image_style")
-    image_style = next((s for s in IMAGE_VISUAL_STYLES if s["name"] == image_style_name), None)
-    image_prompt, negative_prompt = generate_image_prompt(features_text, theme, image_style)
-    new_url = generate_image(image_prompt, negative_prompt)
-    draft["image_url"] = new_url
-    draft["image_prompt"] = image_prompt
-    save_draft(draft)
-    return new_url
+
+    print(f"[Agent] Downloading image for re-hosting...")
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        tmpfile = tmp.name
+
+    try:
+        dl = subprocess.run(
+            ["curl", "-s", "-L", "-m", "60", "-o", tmpfile, url],
+            capture_output=True, timeout=70,
+        )
+        if dl.returncode != 0:
+            raise RuntimeError(f"Download failed: {dl.stderr}")
+
+        # Upload to imgbb
+        upload = subprocess.run(
+            ["curl", "-s", "-m", "30", "-X", "POST",
+             f"https://api.imgbb.com/1/upload?key={IMGBB_API_KEY}",
+             "-F", f"image=@{tmpfile}"],
+            capture_output=True, text=True, timeout=40,
+        )
+        data = json.loads(upload.stdout)
+        if data.get("success"):
+            hosted_url = data["data"]["url"]
+            print(f"[Agent] Re-hosted to imgbb: {hosted_url[:60]}...")
+            return hosted_url
+        else:
+            raise RuntimeError(f"imgbb upload failed: {data}")
+    except Exception as e:
+        print(f"[Agent] Re-hosting failed ({e}), falling back to original URL.")
+        return url
+    finally:
+        try:
+            os.unlink(tmpfile)
+        except OSError:
+            pass
+
+
+def _ensure_image_url(draft: dict) -> str:
+    """Return a stable public image URL, re-generating if expired, always re-hosting via imgbb."""
+    url = draft["image_url"]
+    if not _is_url_accessible(url):
+        print(f"[Agent] Image URL expired or unreachable. Re-generating image...")
+        features_text = fetch_features()
+        theme = draft["theme"]
+        image_style_name = draft.get("image_style")
+        image_style = next((s for s in IMAGE_VISUAL_STYLES if s["name"] == image_style_name), None)
+        image_prompt, negative_prompt = generate_image_prompt(features_text, theme, image_style)
+        url = generate_image(image_prompt, negative_prompt)
+        draft["image_url"] = url
+        draft["image_prompt"] = image_prompt
+        save_draft(draft)
+
+    # Always re-host via imgbb so Instagram's crawlers get a reliable public URL
+    return _rehost_image(url)
 
 
 def run_check() -> None:
