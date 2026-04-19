@@ -162,26 +162,48 @@ def check_response(
             if cb_draft_id != draft_id:
                 continue
 
-            # Acknowledge the button press (removes loading spinner in Telegram)
-            try:
-                requests.post(f"{_base()}/answerCallbackQuery", json={
-                    "callback_query_id": cq["id"],
-                    "text": "Got it!" if action == "approve" else "Send your notes as a reply.",
-                }, timeout=10)
-            except Exception:
-                pass
-
             if action == "approve":
                 status = "approved"
                 awaiting_remarks = False
-            elif action == "revise":
-                awaiting_remarks = True
-                # Prompt user for remarks
+                # Acknowledge button (clears spinner)
+                try:
+                    requests.post(f"{_base()}/answerCallbackQuery", json={
+                        "callback_query_id": cq["id"],
+                        "text": "✅ Approved! Posting to Instagram shortly...",
+                        "show_alert": True,
+                    }, timeout=10)
+                except Exception:
+                    pass
+                # Send persistent confirmation message in chat
                 try:
                     requests.post(f"{_base()}/sendMessage", json={
-                        "chat_id":  _chat_id(),
-                        "text":     "✏️ What should I change? Reply with your revision notes:",
-                        "parse_mode": "Markdown",
+                        "chat_id": _chat_id(),
+                        "text": (
+                            "✅ <b>Post approved!</b>\n\n"
+                            "The agent will upload it to Instagram within the next 10 minutes. "
+                            "You'll get another message when it's live."
+                        ),
+                        "parse_mode": "HTML",
+                    }, timeout=10)
+                except Exception:
+                    pass
+            elif action == "revise":
+                awaiting_remarks = True
+                # Acknowledge button
+                try:
+                    requests.post(f"{_base()}/answerCallbackQuery", json={
+                        "callback_query_id": cq["id"],
+                        "text": "✏️ Send your revision notes below.",
+                        "show_alert": False,
+                    }, timeout=10)
+                except Exception:
+                    pass
+                # Prompt for remarks
+                try:
+                    requests.post(f"{_base()}/sendMessage", json={
+                        "chat_id":    _chat_id(),
+                        "text":       "✏️ <b>What should I change?</b>\n\nReply with your revision notes:",
+                        "parse_mode": "HTML",
                     }, timeout=10)
                 except Exception:
                     pass
