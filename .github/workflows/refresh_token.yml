@@ -27,34 +27,13 @@ jobs:
           echo "new_token=$NEW_TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Update GitHub secret
-        uses: actions/github-script@v7
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           NEW_TOKEN: ${{ steps.refresh.outputs.new_token }}
-        with:
-          github-token: ${{ secrets.GH_PAT }}
-          script: |
-            const sodium = require('libsodium-wrappers');
-            await sodium.ready;
-
-            const key = (await github.rest.actions.getRepoPublicKey({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            })).data;
-
-            const binKey = sodium.from_base64(key.key, sodium.base64_variants.ORIGINAL);
-            const binMsg = sodium.from_string(process.env.NEW_TOKEN);
-            const encBytes = sodium.crypto_box_seal(binMsg, binKey);
-            const encrypted = sodium.to_base64(encBytes, sodium.base64_variants.ORIGINAL);
-
-            await github.rest.actions.createOrUpdateRepoSecret({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              secret_name: 'INSTAGRAM_ACCESS_TOKEN',
-              encrypted_value: encrypted,
-              key_id: key.key_id,
-            });
-
-            console.log('INSTAGRAM_ACCESS_TOKEN secret updated!');
+        run: |
+          echo "$NEW_TOKEN" | gh secret set INSTAGRAM_ACCESS_TOKEN \
+            --repo "${{ github.repository }}"
+          echo "INSTAGRAM_ACCESS_TOKEN secret updated!"
 
       - name: Notify on failure
         if: failure()
