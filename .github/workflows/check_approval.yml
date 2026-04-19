@@ -2,7 +2,7 @@ name: Check Approval & Post
 
 on:
   schedule:
-    - cron: '*/30 5-9 * * *'   # Every 30 min, 10:30 AM–3:00 PM IST
+    - cron: '*/10 5-10 * * *'  # Every 10 min, 10:30 AM–4:00 PM IST
   workflow_dispatch:             # Manual trigger
 
 jobs:

@@ -662,10 +662,18 @@ def run_generate() -> None:
 def run_check() -> None:
     """Poll Telegram for an approval decision and act on it."""
     state = _load_state()
+
+    # Debug: show what state was restored
+    gist_id = state.get("current_gist_id")
+    offset  = state.get("telegram_offset", 0)
+    print(f"[Check] State loaded — gist_id={gist_id}, telegram_offset={offset}")
+
     draft = load_draft(state)
     if not draft:
-        print("[Agent] No pending draft. Nothing to check.")
+        print("[Agent] No pending draft found (gist_id missing or Gist empty). Nothing to check.")
         return
+
+    print(f"[Check] Draft loaded — draft_id={draft['draft_id']}")
 
     offset = state.get("telegram_offset", 0)
     awaiting = state.get("awaiting_remarks", False)
@@ -673,6 +681,7 @@ def run_check() -> None:
     status, remarks, new_offset, new_awaiting = tg_check(
         draft["draft_id"], offset=offset, awaiting_remarks=awaiting
     )
+    print(f"[Check] Telegram status={status}, new_offset={new_offset}")
 
     state["telegram_offset"] = new_offset
     state["awaiting_remarks"] = new_awaiting
