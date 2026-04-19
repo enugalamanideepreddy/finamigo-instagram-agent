@@ -19,18 +19,11 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore agent state
-        id: restore_state
         uses: actions/download-artifact@v4
         with:
           name: agent-state
           path: .
-        continue-on-error: true
-
-      - name: Skip if no active draft
-        if: steps.restore_state.outcome == 'failure'
-        run: |
-          echo "No agent state found — no draft pending."
-          exit 0
+        continue-on-error: true   # Fine on first run — agent handles missing state gracefully
 
       - name: Check Telegram for approval and act
         run: python agent.py --check
