@@ -110,7 +110,7 @@ WRITING STYLE:
 - Focus on the USER BENEFIT (Peace of mind, organized life, financial clarity).
 - NEVER mention technical jargon (parsers, thresholds, CV, algorithms).
 - Use 1–2 emojis max for professional emphasis.
-- End with a clear marketing CTA (Link in bio).
+- End with a "Coming Soon" teaser CTA (app not yet launched — do NOT say "link in bio").
 - Use 6–8 targeted hashtags for growth.
 
 ACCURACY RULES:
@@ -356,7 +356,7 @@ def generate_caption(
         f"- NO engineering jargon (no parsers, algorithms, thresholds, CVs, rules count)\n"
         f"- Write like CRED or Apple — minimal, impactful\n"
         f"- 1–2 emojis max\n"
-        f"- End with a short CTA (link in bio)\n"
+        f"- End with a 'Coming Soon' teaser CTA (app not yet launched — do NOT say 'link in bio')\n"
         f"- Last line: 6–8 hashtags only\n"
         f"- Indian financial context (₹, UPI, EMI, salary)"
     )

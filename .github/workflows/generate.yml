@@ -1,8 +1,8 @@
-name: Generate Daily Post Draft
+name: Generate Twice-Weekly Post Draft
 
 on:
   schedule:
-    - cron: '30 4 * * *'    # 10:00 AM IST daily
+    - cron: '30 4 * * 3,6'  # 10:00 AM IST — Wednesday & Saturday
   workflow_dispatch:         # Manual trigger for testing
 
 jobs:
