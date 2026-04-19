@@ -9,6 +9,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
       - name: Download latest draft artifact
         id: download
         env:
@@ -25,23 +34,15 @@ jobs:
 
           gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" > draft.zip
           unzip -o draft.zip
+          rm draft.zip
           echo "found=true" >> "$GITHUB_OUTPUT"
           echo "Draft artifact $ARTIFACT_ID downloaded."
 
       - name: Skip if no draft pending
-        if: steps.download.outputs.found != 'true' || !hashFiles('draft.json')
+        if: steps.download.outputs.found != 'true'
         run: |
           echo "No pending draft. Nothing to do today."
           exit 0
-
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
 
       - name: Check approval and act
         run: python agent.py --check
