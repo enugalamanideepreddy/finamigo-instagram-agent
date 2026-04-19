@@ -573,12 +573,17 @@ def post_to_instagram(caption: str, image_url: str) -> str:
 # ── Draft Storage (Gist-backed) ───────────────────────────────────────────────
 
 def save_draft(draft: dict, state: dict) -> None:
-    gist_id = state.get("current_gist_id")
-    new_gist_id = save_draft_to_gist(draft, gist_id)
-    state["current_gist_id"] = new_gist_id
-    # Also write local copy for --dry-run / fallback
+    # Always write local copy first (used as fallback and for --dry-run)
     with open(DRAFT_PATH, "w") as f:
         json.dump(draft, f, indent=2)
+    # Try Gist storage (requires GH_PAT with gist scope)
+    try:
+        gist_id = state.get("current_gist_id")
+        new_gist_id = save_draft_to_gist(draft, gist_id)
+        state["current_gist_id"] = new_gist_id
+    except Exception as e:
+        print(f"[Agent] Gist save failed ({e}) — using local draft.json only.")
+        state["current_gist_id"] = None
 
 
 def load_draft(state: dict) -> Optional[dict]:
