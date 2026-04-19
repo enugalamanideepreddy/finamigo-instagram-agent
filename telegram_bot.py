@@ -11,7 +11,7 @@ Setup:
   - Create a bot via @BotFather → copy the token → GitHub secret: TELEGRAM_BOT_TOKEN
   - Send any message to your new bot, then visit:
       https://api.telegram.org/bot<TOKEN>/getUpdates
-    Copy the "chat" → "id" value → GitHub secret: TELEGRAM__chat_id()
+    Copy the "chat" → "id" value → GitHub secret: TELEGRAM_CHAT_ID
 """
 
 import os
@@ -22,7 +22,7 @@ def _token() -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 def _chat_id() -> str:
-    return os.environ.get("TELEGRAM__chat_id()", "")
+    return os.environ.get("TELEGRAM_CHAT_ID", "")
 
 def _base() -> str:
     return f"https://api.telegram.org/bot{_token()}"
@@ -30,7 +30,7 @@ def _base() -> str:
 def _configured() -> bool:
     ok = bool(_token() and _chat_id())
     if not ok:
-        print(f"[Telegram] Not configured — BOT_TOKEN={'set' if _token() else 'MISSING'}, _chat_id()={'set' if _chat_id() else 'MISSING'}")
+        print(f"[Telegram] Not configured — BOT_TOKEN={'set' if _token() else 'MISSING'}, CHAT_ID={'set' if _chat_id() else 'MISSING'}")
     return ok
 
 
