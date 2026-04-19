@@ -19,11 +19,25 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore agent state
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-state
-          path: .
-        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh run list --repo ${{ github.repository }} --workflow generate.yml \
+            --status success --limit 5 --json databaseId \
+            | python3 -c "
+          import sys, json
+          runs = json.load(sys.stdin)
+          if not runs: sys.exit(0)
+          for r in runs:
+              print(r['databaseId'])
+          " | while read run_id; do
+            if gh run download "$run_id" \
+              --repo ${{ github.repository }} \
+              --name agent-state --dir . 2>/dev/null; then
+              echo "Restored agent-state from run $run_id"
+              break
+            fi
+          done || true
 
       - name: Generate draft and send for approval
         run: python agent.py --generate

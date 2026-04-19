@@ -19,11 +19,25 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore agent state
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-state
-          path: .
-        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          # Look in both generate and check_approval recent runs for the latest agent-state
+          for workflow in generate.yml check_approval.yml; do
+            run_ids=$(gh run list --repo ${{ github.repository }} \
+              --workflow "$workflow" --limit 5 --json databaseId \
+              | python3 -c "import sys,json; [print(r['databaseId']) for r in json.load(sys.stdin)]" 2>/dev/null || true)
+            for run_id in $run_ids; do
+              if gh run download "$run_id" \
+                --repo ${{ github.repository }} \
+                --name agent-state --dir . 2>/dev/null; then
+                echo "Restored agent-state from $workflow run $run_id"
+                cat agent_state.json | python3 -c "import sys,json; s=json.load(sys.stdin); print(f'gist_id={s.get(\"current_gist_id\")}, offset={s.get(\"telegram_offset\")}')" 2>/dev/null || true
+                exit 0
+              fi
+            done
+          done
+          echo "No agent-state found — starting fresh."
 
       - name: Check Telegram for approval and act
         run: python agent.py --check
