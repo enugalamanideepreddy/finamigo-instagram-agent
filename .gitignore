@@ -6,3 +6,4 @@ draft.json
 agent_state.json
 FEATURES_CACHE.md
 venv/
+bot_state.json
