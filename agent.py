@@ -84,27 +84,26 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
         "contents": [{"parts": [{"text": user_msg}]}],
         "generationConfig": {"temperature": 0.9, "maxOutputTokens": max_tokens},
     }
-    # Exponential backoff: 30, 60, 90, 120, 150, 180s
+    # Backoff: 65, 65, 65, 65, 65, 65s — always wait >1 min so per-minute quota resets
     max_retries = 6
     for attempt in range(max_retries):
         try:
             r = req.post(GEMINI_URL, json=payload, timeout=90)
             data = r.json()
         except req.exceptions.Timeout:
-            wait = 30 * (attempt + 1)
-            print(f"[Gemini] Timeout on attempt {attempt+1}/{max_retries}. Waiting {wait}s...")
-            time.sleep(wait)
+            print(f"[Gemini] Timeout on attempt {attempt+1}/{max_retries}. Waiting 65s...")
+            time.sleep(65)
             continue
         if "error" in data:
             code = data["error"].get("code") or data["error"].get("status", "")
             if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
-                wait = 30 * (attempt + 1)
-                print(f"[Gemini] Rate limited. Waiting {wait}s (retry {attempt+1}/{max_retries})...")
-                time.sleep(wait)
+                print(f"[Gemini] Rate limited. Waiting 65s (retry {attempt+1}/{max_retries})...")
+                time.sleep(65)
                 continue
             raise RuntimeError(f"Gemini error: {data['error']}")
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    raise RuntimeError(f"Gemini failed after {max_retries} retries (timeout or rate limit).")
+    raise RuntimeError(f"Gemini failed after {max_retries} retries (rate limited). "
+                       "Try again later or check your Gemini API quota at aistudio.google.com.")
 
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
