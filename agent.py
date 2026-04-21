@@ -540,22 +540,29 @@ def _is_url_image(url: str) -> bool:
 
 
 def _ensure_image_url(draft: dict, state: dict) -> str:
-    """Return a composited, stable public URL ready for Instagram."""
+    """Return a stable public image URL ready for Instagram.
+
+    The draft already has a composited imgbb URL from run_generate_with_state.
+    Only re-generate + re-composite if that URL has expired.
+    """
     url = draft["image_url"]
-    if not _is_url_image(url):
-        print("[Agent] Image URL expired — re-generating...")
-        image_style_name = draft.get("image_style")
-        image_style = next(
-            (s for s in IMAGE_VISUAL_STYLES if s["name"] == image_style_name), None
-        )
-        features_text = fetch_features()
-        image_prompt, neg = generate_image_prompt(features_text, draft["theme"], image_style)
-        url = generate_image(image_prompt, neg, state=state)
-        draft["image_url"] = url
-        draft["image_prompt"] = image_prompt
-    # Composite FinAmigo branding (crisp Pillow text) then upload to imgbb
+    if _is_url_image(url):
+        print(f"[Agent] Image URL valid, using existing: {url[:60]}...")
+        return url
+
+    # URL expired — re-generate image and re-composite branding
+    print("[Agent] Image URL expired — re-generating...")
+    image_style_name = draft.get("image_style")
+    image_style = next(
+        (s for s in IMAGE_VISUAL_STYLES if s["name"] == image_style_name), None
+    )
+    features_text = fetch_features()
+    image_prompt, neg = generate_image_prompt(features_text, draft["theme"], image_style)
+    new_url = generate_image(image_prompt, neg, state=state)
+    draft["image_url"] = new_url
+    draft["image_prompt"] = image_prompt
     tagline = draft.get("theme", "")[:60]
-    return upload_composited(url, tagline=tagline)
+    return upload_composited(new_url, tagline=tagline)
 
 
 # ── Instagram Publishing ──────────────────────────────────────────────────────
