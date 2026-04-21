@@ -27,18 +27,7 @@ load_dotenv(override=True)
 from approval import send_draft_email
 from features_loader import fetch_features
 from gist_store import delete_draft_gist, load_draft_from_gist, save_draft_to_gist
-from telegram_bot import (
-    check_response as tg_check,
-    notify as tg_notify,
-    send_draft as tg_send,
-    send_post_wizard_start,
-    send_caption_style_picker,
-    send_context_prompt,
-    IMAGE_STYLE_OPTIONS,
-    CAPTION_STYLE_OPTIONS,
-    _img_label,
-    _cap_label,
-)
+from telegram_bot import notify as tg_notify, send_draft as tg_send
 from image_composer import upload_composited
 import approval as _approval_mod
 
@@ -75,12 +64,9 @@ def _load_state() -> dict:
         "used_images": [],
         "used_caption_styles": [],
         "used_image_styles": [],
-        "telegram_offset": 0,
-        "awaiting_remarks": False,
         "current_gist_id": None,
         "posted_drafts": [],        # [{draft_id, post_id, theme, caption_style, image_style, date}]
         "engagement_scores": {},    # {theme: avg_score}
-        "post_wizard": None,        # wizard state dict or None
     }
 
 
@@ -660,15 +646,64 @@ def generate_draft(
 
 # ── Main Workflows ────────────────────────────────────────────────────────────
 
+def _notify_bot_server(draft: dict, gist_id: str) -> bool:
+    """POST draft to bot server /register_draft so it sends the Telegram approval message."""
+    bot_url = os.environ.get("BOT_SERVER_URL", "").rstrip("/")
+    secret  = os.environ.get("BOT_API_SECRET", "")
+    if not bot_url:
+        return False
+    try:
+        r = req.post(
+            f"{bot_url}/register_draft",
+            json={
+                "draft_id":     draft["draft_id"],
+                "gist_id":      gist_id,
+                "image_url":    draft["image_url"],
+                "caption":      draft["caption"],
+                "theme":        draft.get("theme", ""),
+                "image_style":  draft.get("image_style", ""),
+                "caption_style": draft.get("caption_style", ""),
+            },
+            headers={"X-Bot-Secret": secret},
+            timeout=20,
+        )
+        print(f"[Agent] Bot server notified: {r.status_code}")
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[Agent] Bot server notify failed: {e}")
+        return False
+
+
+def _notify_bot_posted(message: str) -> None:
+    """POST to bot server /notify after Instagram post goes live."""
+    bot_url = os.environ.get("BOT_SERVER_URL", "").rstrip("/")
+    secret  = os.environ.get("BOT_API_SECRET", "")
+    if not bot_url:
+        tg_notify(message)
+        return
+    try:
+        req.post(
+            f"{bot_url}/notify",
+            json={"message": message},
+            headers={"X-Bot-Secret": secret},
+            timeout=15,
+        )
+    except Exception as e:
+        print(f"[Agent] Bot server /notify failed: {e}")
+        tg_notify(message)
+
+
 def run_generate_with_state(
     state: dict,
     forced_image_style: Optional[dict] = None,
     forced_caption_style: Optional[dict] = None,
     extra_context: Optional[str] = None,
+    remarks: Optional[str] = None,
 ) -> None:
-    """Generate a draft using existing state → send to Telegram + email."""
+    """Generate a draft → register with bot server (or fall back to direct Telegram)."""
     draft = generate_draft(
         state,
+        remarks=remarks,
         forced_image_style=forced_image_style,
         forced_caption_style=forced_caption_style,
         extra_context=extra_context,
@@ -680,186 +715,88 @@ def run_generate_with_state(
     draft["image_url"] = tg_image_url
     save_draft(draft, state)
 
-    tg_send(draft, tg_image_url)
-    send_draft_email(draft)
+    gist_id = state.get("current_gist_id", "") or ""
 
+    # Primary: bot server (instant Telegram via webhook)
+    if not _notify_bot_server(draft, gist_id):
+        # Fallback: direct Telegram send (no bot server configured)
+        tg_send(draft, tg_image_url)
+
+    send_draft_email(draft)
     print("[Agent] Draft generated and sent for approval.")
     _save_state(state)
 
 
 def run_generate() -> None:
-    """Generate a draft → send to Telegram + email for approval."""
-    state = _load_state()
-    run_generate_with_state(state)
-
-
-def run_check() -> None:
-    """Poll Telegram for approval / wizard input and act on it."""
+    """Generate a draft — reads override env vars set by workflow dispatch inputs."""
     state = _load_state()
 
-    gist_id = state.get("current_gist_id")
-    offset  = state.get("telegram_offset", 0)
-    wizard  = state.get("post_wizard")  # dict with step/image_style/caption_style, or None
-    print(f"[Check] State loaded — gist_id={gist_id}, offset={offset}, wizard_step={wizard and wizard.get('step')}")
+    img_override = os.environ.get("IMAGE_STYLE_OVERRIDE", "").strip()
+    cap_override = os.environ.get("CAPTION_STYLE_OVERRIDE", "").strip()
+    ctx_override = os.environ.get("CONTEXT_OVERRIDE", "").strip() or None
+    remarks_override = os.environ.get("REMARKS_OVERRIDE", "").strip() or None
+    gist_override = os.environ.get("GIST_ID_OVERRIDE", "").strip() or None
 
-    draft    = load_draft(state)
-    draft_id = draft["draft_id"] if draft else None
-    if draft:
-        print(f"[Check] Draft loaded — draft_id={draft_id}")
-    else:
-        print("[Check] No pending draft.")
+    if gist_override:
+        state["current_gist_id"] = gist_override
 
-    awaiting     = state.get("awaiting_remarks", False)
-    wizard_step  = wizard.get("step") if wizard else None
-
-    status, payload, new_offset, new_awaiting = tg_check(
-        draft_id,
-        offset=offset,
-        awaiting_remarks=awaiting,
-        wizard_step=wizard_step,
+    forced_img = (
+        next((s for s in IMAGE_VISUAL_STYLES if s["name"] == img_override), None)
+        if img_override and img_override != "auto" else None
     )
-    print(f"[Check] status={status}, payload={payload!r}, new_offset={new_offset}")
+    forced_cap = (
+        next((s for s in CAPTION_STYLES if s["name"] == cap_override), None)
+        if cap_override and cap_override != "auto" else None
+    )
 
-    state["telegram_offset"] = new_offset
-    state["awaiting_remarks"] = new_awaiting
+    run_generate_with_state(
+        state,
+        forced_image_style=forced_img,
+        forced_caption_style=forced_cap,
+        extra_context=ctx_override,
+        remarks=remarks_override,
+    )
 
-    # ── Wizard steps ─────────────────────────────────────────────────────────
 
-    if status == "post_requested":
-        if draft:
-            tg_notify(
-                "⚠️ There's already a draft pending approval.\n\n"
-                "Approve or revise it first, then send /post again."
-            )
-        else:
-            state["post_wizard"] = {"step": "img_style"}
-            _save_state(state)
-            send_post_wizard_start()
-
-    elif status == "wizard_img_picked":
-        img_style = payload  # e.g. "neon_cyberpunk" or "auto"
-        state["post_wizard"] = {"step": "cap_style", "image_style": img_style}
-        _save_state(state)
-        send_caption_style_picker(_img_label(img_style))
-
-    elif status == "wizard_cap_picked":
-        cap_style  = payload
-        img_style  = (wizard or {}).get("image_style", "auto")
-        state["post_wizard"] = {
-            "step":         "context",
-            "image_style":  img_style,
-            "caption_style": cap_style,
-        }
-        _save_state(state)
-        send_context_prompt(_img_label(img_style), _cap_label(cap_style))
-
-    elif status == "wizard_context":
-        # payload is context text or None (skipped)
-        w           = wizard or {}
-        img_style   = w.get("image_style", "auto")
-        cap_style   = w.get("caption_style", "auto")
-        context     = payload  # may be None
-
-        # Resolve "auto" to a real pick
-        chosen_img = None if img_style == "auto" else next(
-            (s for s in IMAGE_VISUAL_STYLES if s["name"] == img_style), None
-        )
-        chosen_cap = None if cap_style == "auto" else next(
-            (s for s in CAPTION_STYLES if s["name"] == cap_style), None
-        )
-
-        state["post_wizard"] = None
-        _save_state(state)
-
-        tg_notify("⏳ Starting generation now — I'll send the draft here shortly...")
-        run_generate_with_state(
-            state,
-            forced_image_style=chosen_img,
-            forced_caption_style=chosen_cap,
-            extra_context=context,
-        )
+def run_post_gist() -> None:
+    """Load draft from Gist (GIST_ID_OVERRIDE env var) and post to Instagram."""
+    gist_id = os.environ.get("GIST_ID_OVERRIDE", "").strip()
+    if not gist_id:
+        print("[Post] GIST_ID_OVERRIDE not set — nothing to post.")
         return
 
-    # ── Draft approval ────────────────────────────────────────────────────────
+    print(f"[Post] Loading draft from Gist {gist_id}...")
+    state = _load_state()
+    state["current_gist_id"] = gist_id
 
-    elif status == "approved":
-        if not draft:
-            print("[Agent] Approved but no draft — ignoring.")
-        else:
-            print("[Agent] Posting approved draft to Instagram...")
-            try:
-                image_url = _ensure_image_url(draft, state)
-                post_id   = post_to_instagram(draft["caption"], image_url)
-                state.setdefault("posted_drafts", []).append({
-                    "draft_id":      draft["draft_id"],
-                    "post_id":       post_id,
-                    "theme":         draft["theme"],
-                    "caption_style": draft.get("caption_style"),
-                    "image_style":   draft.get("image_style"),
-                    "date":          datetime.now().strftime("%Y-%m-%d"),
-                })
-                state["posted_drafts"] = state["posted_drafts"][-20:]
-                clear_draft(state)
-                tg_notify("✅ *Post is live on Instagram!*")
-                print("[Agent] Done! Post is live.")
-            except Exception as e:
-                tg_notify(f"❌ *Instagram post failed:*\n`{e}`")
-                raise
+    draft = load_draft(state)
+    if not draft:
+        print("[Post] Could not load draft from Gist.")
+        _notify_bot_posted("❌ Post failed: could not load draft from Gist.")
+        return
 
-    elif status == "remarks":
-        if not draft:
-            print("[Agent] Remarks received but no draft — ignoring.")
-        else:
-            print(f"[Agent] Revision requested: {payload}")
-            features_text = fetch_features()
-            theme         = draft["theme"]
-            caption_style = next(
-                (s for s in CAPTION_STYLES if s["name"] == draft.get("caption_style")), None
-            )
-            image_style   = next(
-                (s for s in IMAGE_VISUAL_STYLES if s["name"] == draft.get("image_style")), None
-            )
-            needs_new_image = any(
-                kw in (payload or "").lower()
-                for kw in ["image", "photo", "visual", "picture", "redesign", "change the"]
-            )
-            caption = generate_caption(features_text, theme, payload, caption_style)
-            is_valid, reason = fact_check_caption(features_text, caption)
-            if not is_valid:
-                caption = generate_caption(
-                    features_text, theme,
-                    remarks=f"{payload}\n\nAlso fix: {reason}",
-                    caption_style=caption_style,
-                )
-            if needs_new_image:
-                print("[Agent] Regenerating image as requested...")
-                image_prompt, neg = generate_image_prompt(features_text, theme, image_style)
-                image_url = generate_image(image_prompt, neg, state=state)
-            else:
-                image_url    = draft["image_url"]
-                image_prompt = draft.get("image_prompt", "")
+    print(f"[Post] Posting draft {draft['draft_id']} to Instagram...")
+    try:
+        image_url = _ensure_image_url(draft, state)
+        post_id   = post_to_instagram(draft["caption"], image_url)
+        state.setdefault("posted_drafts", []).append({
+            "draft_id":      draft["draft_id"],
+            "post_id":       post_id,
+            "theme":         draft["theme"],
+            "caption_style": draft.get("caption_style"),
+            "image_style":   draft.get("image_style"),
+            "date":          datetime.now().strftime("%Y-%m-%d"),
+        })
+        state["posted_drafts"] = state["posted_drafts"][-20:]
+        clear_draft(state)
+        _save_state(state)
+        _notify_bot_posted("🎉 <b>Post is live on Instagram!</b>")
+        print("[Post] Done!")
+    except Exception as e:
+        _notify_bot_posted(f"❌ Instagram post failed: {e}")
+        raise
 
-            new_draft = {
-                "draft_id":      _approval_mod.generate_draft_id(),
-                "date":          datetime.now().strftime("%Y-%m-%d"),
-                "theme":         theme,
-                "caption_style": draft.get("caption_style"),
-                "image_style":   draft.get("image_style"),
-                "caption":       caption,
-                "image_url":     image_url,
-                "image_prompt":  image_prompt,
-                "status":        "pending",
-                "attempt":       draft.get("attempt", 1) + 1,
-            }
-            save_draft(new_draft, state)
-            tg_send(new_draft, image_url)
-            send_draft_email(new_draft)
-            print(f"[Agent] Revision #{new_draft['attempt']} sent for approval.")
 
-    else:
-        print("[Agent] No actionable update. Will check again later.")
-
-    _save_state(state)
 
 
 def run_metrics() -> None:
@@ -961,17 +898,17 @@ def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "--generate"
     if mode == "--generate":
         run_generate()
-    elif mode == "--check":
-        run_check()
     elif mode == "--dry-run":
         run_dry_run()
     elif mode == "--post-now":
         run_post_now()
     elif mode == "--metrics":
         run_metrics()
+    elif mode == "--post-gist":
+        run_post_gist()
     else:
         print(f"Unknown mode: {mode}")
-        print("Usage: python agent.py [--generate|--check|--dry-run|--post-now|--metrics]")
+        print("Usage: python agent.py [--generate|--check|--dry-run|--post-now|--post-gist|--metrics]")
         sys.exit(1)
 
 
