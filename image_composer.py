@@ -152,23 +152,43 @@ def composite_branding(
 
 
 def _upload_catbox(jpg_bytes: bytes) -> str:
-    """Upload to catbox.moe — no account needed, no hotlink protection."""
+    """Upload to catbox.moe — free, no hotlink protection, Instagram-friendly."""
+    # Must use files= for ALL fields in multipart (including text fields)
     r = requests.post(
         "https://catbox.moe/user/api.php",
-        data={"reqtype": "fileupload"},
-        files={"fileToUpload": ("finamigo_post.jpg", jpg_bytes, "image/jpeg")},
+        files={
+            "reqtype":      (None, "fileupload"),
+            "fileToUpload": ("finamigo_post.jpg", jpg_bytes, "image/jpeg"),
+        },
+        timeout=60,
+    )
+    url = r.text.strip()
+    if not url.startswith("https://files.catbox.moe/"):
+        raise RuntimeError(f"catbox.moe: {r.text[:100]}")
+    return url
+
+
+def _upload_litterbox(jpg_bytes: bytes) -> str:
+    """Upload to litterbox.catbox.moe — 72h temp storage, same CDN, no hotlink block."""
+    r = requests.post(
+        "https://litterbox.catbox.moe/resources/internals/api.php",
+        files={
+            "reqtype":      (None, "fileupload"),
+            "time":         (None, "72h"),
+            "fileToUpload": ("finamigo_post.jpg", jpg_bytes, "image/jpeg"),
+        },
         timeout=60,
     )
     url = r.text.strip()
     if not url.startswith("https://"):
-        raise RuntimeError(f"catbox.moe error: {r.text}")
+        raise RuntimeError(f"litterbox: {r.text[:100]}")
     return url
 
 
 def _upload_imgbb(jpg_bytes: bytes) -> str:
-    """Upload to imgbb — fallback option."""
+    """Upload to imgbb — last resort fallback."""
     if not IMGBB_API_KEY:
-        raise RuntimeError("No IMGBB_API_KEY set")
+        raise RuntimeError("No IMGBB_API_KEY")
     r = requests.post(
         f"https://api.imgbb.com/1/upload?key={IMGBB_API_KEY}",
         files={"image": ("finamigo_post.jpg", jpg_bytes, "image/jpeg")},
@@ -176,8 +196,8 @@ def _upload_imgbb(jpg_bytes: bytes) -> str:
     )
     data = r.json()
     if data.get("success"):
-        return data["data"]["image"]["url"]  # direct CDN URL
-    raise RuntimeError(f"imgbb error: {data}")
+        return data["data"]["image"]["url"]
+    raise RuntimeError(f"imgbb: {data}")
 
 
 def upload_composited(image_url: str, tagline: str = "") -> str:
@@ -189,19 +209,18 @@ def upload_composited(image_url: str, tagline: str = "") -> str:
         print(f"[Composer] Compositing failed: {e} — using original URL.")
         return image_url
 
-    # Try catbox.moe first (no hotlink protection — Instagram-friendly)
-    try:
-        url = _upload_catbox(jpg_bytes)
-        print(f"[Composer] Uploaded to catbox.moe: {url}")
-        return url
-    except Exception as e:
-        print(f"[Composer] catbox.moe failed: {e} — trying imgbb...")
+    hosts = [
+        ("catbox.moe",    _upload_catbox),
+        ("litterbox",     _upload_litterbox),
+        ("imgbb",         _upload_imgbb),
+    ]
+    for name, fn in hosts:
+        try:
+            url = fn(jpg_bytes)
+            print(f"[Composer] Uploaded to {name}: {url}")
+            return url
+        except Exception as e:
+            print(f"[Composer] {name} failed: {e}")
 
-    # Fallback: imgbb
-    try:
-        url = _upload_imgbb(jpg_bytes)
-        print(f"[Composer] Uploaded to imgbb: {url[:60]}...")
-        return url
-    except Exception as e:
-        print(f"[Composer] imgbb also failed: {e} — using original URL.")
-        return image_url
+    print("[Composer] All hosts failed — using original URL.")
+    return image_url
