@@ -40,13 +40,20 @@ INSTAGRAM_ACCOUNT_ID   = os.environ["INSTAGRAM_ACCOUNT_ID"]
 IMGBB_API_KEY          = os.environ.get("IMGBB_API_KEY", "")
 
 def _gemini_url(model: str) -> str:
+    # Use v1 (stable) for 1.5 models, v1beta for 2.x models
+    version = "v1beta" if "2." in model or "2.5" in model else "v1"
     return (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"https://generativelanguage.googleapis.com/{version}/models/"
         f"{model}:generateContent?key={GEMINI_API_KEY}"
     )
 
-# Models tried in order — Flash Lite: unlimited RPD, cheapest; others as fallback
-GEMINI_MODELS = ["gemini-2.0-flash-lite", "gemini-2.0-flash-exp", "gemini-1.5-flash"]
+# Models in order — newer models first, stable fallbacks last
+GEMINI_MODELS = [
+    "gemini-2.5-flash-preview-04-17",  # latest, shown on rate limits page
+    "gemini-2.0-flash-lite",            # cheapest 2.x
+    "gemini-1.5-flash",                 # stable fallback (uses v1)
+    "gemini-1.5-flash-8b",              # lightest fallback (uses v1)
+]
 
 # Local fallback draft path (used for --dry-run and --post-now only)
 DRAFT_PATH = os.path.join(os.path.dirname(__file__), "draft.json")
