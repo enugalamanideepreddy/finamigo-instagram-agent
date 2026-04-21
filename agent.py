@@ -39,10 +39,14 @@ INSTAGRAM_ACCESS_TOKEN = os.environ["INSTAGRAM_ACCESS_TOKEN"]
 INSTAGRAM_ACCOUNT_ID   = os.environ["INSTAGRAM_ACCOUNT_ID"]
 IMGBB_API_KEY          = os.environ.get("IMGBB_API_KEY", "")
 
-GEMINI_URL = (
-    f"https://generativelanguage.googleapis.com/v1beta/models/"
-    f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-)
+def _gemini_url(model: str) -> str:
+    return (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent?key={GEMINI_API_KEY}"
+    )
+
+# Models tried in order — each has its own separate quota pool
+GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
 
 # Local fallback draft path (used for --dry-run and --post-now only)
 DRAFT_PATH = os.path.join(os.path.dirname(__file__), "draft.json")
@@ -84,26 +88,32 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
         "contents": [{"parts": [{"text": user_msg}]}],
         "generationConfig": {"temperature": 0.9, "maxOutputTokens": max_tokens},
     }
-    # Backoff: 65, 65, 65, 65, 65, 65s — always wait >1 min so per-minute quota resets
-    max_retries = 6
-    for attempt in range(max_retries):
-        try:
-            r = req.post(GEMINI_URL, json=payload, timeout=90)
-            data = r.json()
-        except req.exceptions.Timeout:
-            print(f"[Gemini] Timeout on attempt {attempt+1}/{max_retries}. Waiting 65s...")
-            time.sleep(65)
-            continue
-        if "error" in data:
-            code = data["error"].get("code") or data["error"].get("status", "")
-            if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
-                print(f"[Gemini] Rate limited. Waiting 65s (retry {attempt+1}/{max_retries})...")
+    # Try each model in order — each has its own separate free quota pool
+    for model in GEMINI_MODELS:
+        print(f"[Gemini] Trying model: {model}")
+        url = _gemini_url(model)
+        for attempt in range(3):
+            try:
+                r = req.post(url, json=payload, timeout=90)
+                data = r.json()
+            except req.exceptions.Timeout:
+                print(f"[Gemini] Timeout ({model}, attempt {attempt+1}/3). Waiting 65s...")
                 time.sleep(65)
                 continue
-            raise RuntimeError(f"Gemini error: {data['error']}")
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    raise RuntimeError(f"Gemini failed after {max_retries} retries (rate limited). "
-                       "Try again later or check your Gemini API quota at aistudio.google.com.")
+            if "error" in data:
+                code = data["error"].get("code") or data["error"].get("status", "")
+                if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
+                    if attempt < 2:
+                        print(f"[Gemini] Rate limited ({model}). Waiting 65s (attempt {attempt+1}/3)...")
+                        time.sleep(65)
+                        continue
+                    else:
+                        print(f"[Gemini] {model} quota exhausted — trying next model.")
+                        break  # move to next model
+                raise RuntimeError(f"Gemini error: {data['error']}")
+            print(f"[Gemini] Success with {model}")
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    raise RuntimeError("All Gemini models rate limited. Check quota at aistudio.google.com.")
 
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
