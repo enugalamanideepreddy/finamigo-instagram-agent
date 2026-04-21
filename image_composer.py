@@ -151,8 +151,37 @@ def composite_branding(
     return buf.getvalue()
 
 
+def _upload_catbox(jpg_bytes: bytes) -> str:
+    """Upload to catbox.moe — no account needed, no hotlink protection."""
+    r = requests.post(
+        "https://catbox.moe/user/api.php",
+        data={"reqtype": "fileupload"},
+        files={"fileToUpload": ("finamigo_post.jpg", jpg_bytes, "image/jpeg")},
+        timeout=60,
+    )
+    url = r.text.strip()
+    if not url.startswith("https://"):
+        raise RuntimeError(f"catbox.moe error: {r.text}")
+    return url
+
+
+def _upload_imgbb(jpg_bytes: bytes) -> str:
+    """Upload to imgbb — fallback option."""
+    if not IMGBB_API_KEY:
+        raise RuntimeError("No IMGBB_API_KEY set")
+    r = requests.post(
+        f"https://api.imgbb.com/1/upload?key={IMGBB_API_KEY}",
+        files={"image": ("finamigo_post.jpg", jpg_bytes, "image/jpeg")},
+        timeout=40,
+    )
+    data = r.json()
+    if data.get("success"):
+        return data["data"]["image"]["url"]  # direct CDN URL
+    raise RuntimeError(f"imgbb error: {data}")
+
+
 def upload_composited(image_url: str, tagline: str = "") -> str:
-    """Composite branding onto image and upload to imgbb. Returns hosted URL."""
+    """Composite FinAmigo branding and upload to a public host. Returns URL."""
     print("[Composer] Compositing FinAmigo branding onto image...")
     try:
         jpg_bytes = composite_branding(image_url, tagline=tagline)
@@ -160,22 +189,19 @@ def upload_composited(image_url: str, tagline: str = "") -> str:
         print(f"[Composer] Compositing failed: {e} — using original URL.")
         return image_url
 
-    if not IMGBB_API_KEY:
-        print("[Composer] No IMGBB_API_KEY — returning original URL.")
-        return image_url
-
+    # Try catbox.moe first (no hotlink protection — Instagram-friendly)
     try:
-        r = requests.post(
-            f"https://api.imgbb.com/1/upload?key={IMGBB_API_KEY}",
-            files={"image": ("finamigo_post.jpg", jpg_bytes, "image/jpeg")},
-            timeout=40,
-        )
-        data = r.json()
-        if data.get("success"):
-            url = data["data"]["url"]
-            print(f"[Composer] Uploaded composited image: {url[:60]}...")
-            return url
-        raise RuntimeError(f"imgbb error: {data}")
+        url = _upload_catbox(jpg_bytes)
+        print(f"[Composer] Uploaded to catbox.moe: {url}")
+        return url
     except Exception as e:
-        print(f"[Composer] Upload failed: {e} — using original URL.")
+        print(f"[Composer] catbox.moe failed: {e} — trying imgbb...")
+
+    # Fallback: imgbb
+    try:
+        url = _upload_imgbb(jpg_bytes)
+        print(f"[Composer] Uploaded to imgbb: {url[:60]}...")
+        return url
+    except Exception as e:
+        print(f"[Composer] imgbb also failed: {e} — using original URL.")
         return image_url

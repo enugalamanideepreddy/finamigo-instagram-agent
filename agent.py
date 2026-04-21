@@ -546,9 +546,16 @@ def _ensure_image_url(draft: dict, state: dict) -> str:
     Only re-generate + re-composite if that URL has expired.
     """
     url = draft["image_url"]
-    if _is_url_image(url):
+    # Re-upload imgbb URLs — imgbb blocks Instagram's crawler (hotlink protection)
+    is_imgbb = "ibb.co" in url
+    if _is_url_image(url) and not is_imgbb:
         print(f"[Agent] Image URL valid, using existing: {url[:60]}...")
         return url
+    if is_imgbb:
+        print("[Agent] imgbb URL detected — re-uploading to catbox.moe for Instagram...")
+        from image_composer import upload_composited as _rehost
+        tagline = draft.get("theme", "")[:60]
+        return _rehost(url, tagline=tagline)
 
     # URL expired — re-generate image and re-composite branding
     print("[Agent] Image URL expired — re-generating...")
