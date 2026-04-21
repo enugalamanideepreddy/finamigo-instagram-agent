@@ -45,8 +45,8 @@ def _gemini_url(model: str) -> str:
         f"{model}:generateContent?key={GEMINI_API_KEY}"
     )
 
-# Models tried in order — 2.0-flash-exp is the new-user-compatible Gemini 2 Flash
-GEMINI_MODELS = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+# Models tried in order — Flash Lite: unlimited RPD, cheapest; others as fallback
+GEMINI_MODELS = ["gemini-2.0-flash-lite", "gemini-2.0-flash-exp", "gemini-1.5-flash"]
 
 # Local fallback draft path (used for --dry-run and --post-now only)
 DRAFT_PATH = os.path.join(os.path.dirname(__file__), "draft.json")
