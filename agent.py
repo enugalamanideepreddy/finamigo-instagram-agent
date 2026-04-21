@@ -45,8 +45,8 @@ def _gemini_url(model: str) -> str:
         f"{model}:generateContent?key={GEMINI_API_KEY}"
     )
 
-# Models tried in order — each has its own separate quota pool
-GEMINI_MODELS = ["gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+# Models tried in order — stable free-tier models first
+GEMINI_MODELS = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.0-flash-lite"]
 
 # Local fallback draft path (used for --dry-run and --post-now only)
 DRAFT_PATH = os.path.join(os.path.dirname(__file__), "draft.json")
@@ -101,7 +101,13 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
                 time.sleep(65)
                 continue
             if "error" in data:
-                code = data["error"].get("code") or data["error"].get("status", "")
+                code   = data["error"].get("code") or data["error"].get("status", "")
+                status = data["error"].get("status", "")
+                # Model unavailable for this account → skip immediately
+                if code == 404 or status == "NOT_FOUND":
+                    print(f"[Gemini] {model} not available — trying next model.")
+                    break
+                # Rate limited → wait and retry, then move on
                 if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
                     if attempt < 2:
                         print(f"[Gemini] Rate limited ({model}). Waiting 65s (attempt {attempt+1}/3)...")
@@ -109,7 +115,7 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
                         continue
                     else:
                         print(f"[Gemini] {model} quota exhausted — trying next model.")
-                        break  # move to next model
+                        break
                 raise RuntimeError(f"Gemini error: {data['error']}")
             print(f"[Gemini] Success with {model}")
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
