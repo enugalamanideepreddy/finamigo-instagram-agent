@@ -89,37 +89,50 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
         "generationConfig": {"temperature": 0.9, "maxOutputTokens": max_tokens},
     }
     # Try each model in order — each has its own separate free quota pool
+    last_errors = {}
     for model in GEMINI_MODELS:
         print(f"[Gemini] Trying model: {model}")
         url = _gemini_url(model)
         for attempt in range(3):
             try:
                 r = req.post(url, json=payload, timeout=90)
+                print(f"[Gemini] HTTP {r.status_code} from {model}")
                 data = r.json()
             except req.exceptions.Timeout:
                 print(f"[Gemini] Timeout ({model}, attempt {attempt+1}/3). Waiting 65s...")
                 time.sleep(65)
                 continue
             if "error" in data:
-                code   = data["error"].get("code") or data["error"].get("status", "")
-                status = data["error"].get("status", "")
-                # Model unavailable for this account → skip immediately
+                err    = data["error"]
+                code   = err.get("code") or err.get("status", "")
+                status = err.get("status", "")
+                msg    = err.get("message", "")
+                print(f"[Gemini] {model} error — code={code} status={status} msg={msg[:120]}")
+                last_errors[model] = f"{code}: {msg[:80]}"
+                # Model unavailable → skip to next
                 if code == 404 or status == "NOT_FOUND":
-                    print(f"[Gemini] {model} not available — trying next model.")
                     break
+                # Invalid key / permission denied → no point retrying other models
+                if code == 400 or code == 403 or status in ("INVALID_ARGUMENT", "PERMISSION_DENIED"):
+                    raise RuntimeError(
+                        f"Gemini API key error ({status}): {msg}\n"
+                        "→ Check that GEMINI_API_KEY secret is updated in GitHub repo settings."
+                    )
                 # Rate limited → wait and retry, then move on
                 if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
                     if attempt < 2:
-                        print(f"[Gemini] Rate limited ({model}). Waiting 65s (attempt {attempt+1}/3)...")
+                        print(f"[Gemini] Rate limited. Waiting 65s (attempt {attempt+1}/3)...")
                         time.sleep(65)
                         continue
                     else:
                         print(f"[Gemini] {model} quota exhausted — trying next model.")
                         break
-                raise RuntimeError(f"Gemini error: {data['error']}")
-            print(f"[Gemini] Success with {model}")
+                # Unknown error — skip model
+                print(f"[Gemini] Unknown error for {model} — trying next model.")
+                break
+            print(f"[Gemini] ✓ Success with {model}")
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    raise RuntimeError("All Gemini models rate limited. Check quota at aistudio.google.com.")
+    raise RuntimeError(f"All Gemini models failed. Errors: {last_errors}")
 
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
