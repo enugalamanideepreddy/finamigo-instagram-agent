@@ -106,20 +106,20 @@ def send_draft(draft: dict, image_url: str) -> Optional[int]:
 
 
 def check_response(
-    draft_id: str,
+    draft_id: Optional[str],
     offset: int = 0,
     awaiting_remarks: bool = False,
 ) -> Tuple[str, Optional[str], int, bool]:
-    """Poll Telegram getUpdates for an approval decision.
+    """Poll Telegram getUpdates for an approval decision or /post command.
 
     Args:
-        draft_id:         The current draft's ID to match against callback data.
+        draft_id:         The current draft's ID (or None if no pending draft).
         offset:           Last processed update_id + 1 (persisted in agent_state).
         awaiting_remarks: True if a revise button was pressed and we're waiting for a text reply.
 
     Returns:
         (status, remarks, new_offset, new_awaiting_remarks)
-        status is "approved", "remarks", or "pending".
+        status is "approved", "remarks", "post_requested", or "pending".
     """
     if not _configured():
         return ("pending", None, offset, awaiting_remarks)
@@ -208,22 +208,59 @@ def check_response(
                 except Exception:
                     pass
 
-        # ── Text message (revision notes) ────────────────────────────────────
-        elif "message" in update and awaiting_remarks:
+        # ── Text message (revision notes or /post command) ───────────────────
+        elif "message" in update:
             msg = update["message"]
             from_chat = str(msg.get("chat", {}).get("id", ""))
             text = msg.get("text", "").strip()
 
             if from_chat != str(_chat_id()):
                 continue
-            if not text or text.startswith("/"):
+            if not text:
                 continue
 
-            status = "remarks"
-            remarks_text = text
-            awaiting_remarks = False
+            # /post command — request a new post generation
+            if text.lower() in ("/post", "/post@finamigobot"):
+                status = "post_requested"
+                continue
+
+            # /status command — user wants to know current state
+            if text.lower() in ("/status", "/help"):
+                _send_status_reply(draft_id)
+                continue
+
+            if awaiting_remarks and not text.startswith("/"):
+                status = "remarks"
+                remarks_text = text
+                awaiting_remarks = False
 
     return (status, remarks_text, new_offset, awaiting_remarks)
+
+
+def _send_status_reply(draft_id: Optional[str]) -> None:
+    """Reply with current agent status."""
+    if not _configured():
+        return
+    if draft_id:
+        msg = (
+            f"📋 <b>Status:</b> Draft pending approval\n"
+            f"<b>Draft ID:</b> <code>{draft_id}</code>\n\n"
+            f"Tap ✅ Approve or ✏️ Revise on the draft message above.\n\n"
+            f"Send /post to generate a new draft (replaces current)."
+        )
+    else:
+        msg = (
+            "💤 <b>Status:</b> No pending draft.\n\n"
+            "Send /post to generate a new Instagram post for approval."
+        )
+    try:
+        requests.post(f"{_base()}/sendMessage", json={
+            "chat_id":    _chat_id(),
+            "text":       msg,
+            "parse_mode": "HTML",
+        }, timeout=10)
+    except Exception:
+        pass
 
 
 def notify(message: str) -> None:

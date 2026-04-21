@@ -638,25 +638,27 @@ def generate_draft(state: dict, remarks: Optional[str] = None) -> dict:
 
 # ── Main Workflows ────────────────────────────────────────────────────────────
 
-def run_generate() -> None:
-    """Generate a draft → send to Telegram + email for approval."""
-    state = _load_state()
+def run_generate_with_state(state: dict) -> None:
+    """Generate a draft using existing state → send to Telegram + email."""
     draft = generate_draft(state)
     save_draft(draft, state)
     _save_state(state)
 
-    # Upload image to imgbb now so Telegram gets a stable public URL
     tg_image_url = upload_composited(draft["image_url"], tagline=draft.get("theme", "")[:60])
-    draft["image_url"] = tg_image_url  # persist stable URL so check_approval doesn't re-upload
+    draft["image_url"] = tg_image_url
     save_draft(draft, state)
 
-    # Primary: Telegram (instant)
     tg_send(draft, tg_image_url)
-    # Backup: Email (async fallback)
     send_draft_email(draft)
 
     print("[Agent] Draft generated and sent for approval.")
     _save_state(state)
+
+
+def run_generate() -> None:
+    """Generate a draft → send to Telegram + email for approval."""
+    state = _load_state()
+    run_generate_with_state(state)
 
 
 def run_check() -> None:
@@ -669,22 +671,29 @@ def run_check() -> None:
     print(f"[Check] State loaded — gist_id={gist_id}, telegram_offset={offset}")
 
     draft = load_draft(state)
-    if not draft:
-        print("[Agent] No pending draft found (gist_id missing or Gist empty). Nothing to check.")
-        return
+    draft_id = draft["draft_id"] if draft else None
 
-    print(f"[Check] Draft loaded — draft_id={draft['draft_id']}")
+    if not draft:
+        print("[Agent] No pending draft — checking for /post command only.")
 
     offset = state.get("telegram_offset", 0)
     awaiting = state.get("awaiting_remarks", False)
 
     status, remarks, new_offset, new_awaiting = tg_check(
-        draft["draft_id"], offset=offset, awaiting_remarks=awaiting
+        draft_id, offset=offset, awaiting_remarks=awaiting
     )
+
+    if draft:
+        print(f"[Check] Draft loaded — draft_id={draft_id}")
     print(f"[Check] Telegram status={status}, new_offset={new_offset}")
 
     state["telegram_offset"] = new_offset
     state["awaiting_remarks"] = new_awaiting
+
+    if status in ("approved", "remarks") and not draft:
+        print(f"[Agent] Got status={status} but no draft loaded — ignoring.")
+        _save_state(state)
+        return
 
     if status == "approved":
         print("[Agent] Posting approved draft to Instagram...")
@@ -761,6 +770,20 @@ def run_check() -> None:
         tg_send(new_draft, image_url)
         send_draft_email(new_draft)
         print(f"[Agent] Revision #{new_draft['attempt']} sent for approval.")
+
+    elif status == "post_requested":
+        print("[Agent] /post command received from Telegram.")
+        if draft:
+            # Already have a pending draft — remind the user
+            tg_notify(
+                "⚠️ There's already a draft waiting for your approval.\n\n"
+                "Approve or revise it first, then send /post to generate a new one."
+            )
+        else:
+            tg_notify("⏳ Got it! Generating a new post now — I'll send it here shortly...")
+            _save_state(state)
+            run_generate_with_state(state)
+            return  # state already saved inside run_generate_with_state
 
     else:
         print("[Agent] No response yet. Will check again later.")
