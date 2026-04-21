@@ -78,31 +78,33 @@ def _save_state(state: dict) -> None:
 # ── HTTP / Gemini ─────────────────────────────────────────────────────────────
 
 def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) -> str:
-    """Call Gemini 2.0 Flash. Retries up to 3x on 429 rate limits."""
+    """Call Gemini 2.0 Flash. Retries up to 6x with exponential backoff on 429/timeout."""
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"parts": [{"text": user_msg}]}],
         "generationConfig": {"temperature": 0.9, "maxOutputTokens": max_tokens},
     }
-    for attempt in range(4):
+    # Exponential backoff: 30, 60, 90, 120, 150, 180s
+    max_retries = 6
+    for attempt in range(max_retries):
         try:
             r = req.post(GEMINI_URL, json=payload, timeout=90)
             data = r.json()
         except req.exceptions.Timeout:
-            wait = 20 * (attempt + 1)
-            print(f"[Gemini] Timeout on attempt {attempt+1}/4. Waiting {wait}s before retry...")
+            wait = 30 * (attempt + 1)
+            print(f"[Gemini] Timeout on attempt {attempt+1}/{max_retries}. Waiting {wait}s...")
             time.sleep(wait)
             continue
         if "error" in data:
             code = data["error"].get("code") or data["error"].get("status", "")
             if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
                 wait = 30 * (attempt + 1)
-                print(f"[Gemini] Rate limited. Waiting {wait}s (retry {attempt+1}/4)...")
+                print(f"[Gemini] Rate limited. Waiting {wait}s (retry {attempt+1}/{max_retries})...")
                 time.sleep(wait)
                 continue
             raise RuntimeError(f"Gemini error: {data['error']}")
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    raise RuntimeError("Gemini failed after 4 retries (timeout or rate limit).")
+    raise RuntimeError(f"Gemini failed after {max_retries} retries (timeout or rate limit).")
 
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
@@ -608,6 +610,7 @@ def generate_draft(
 
     # Generate caption with fact-checking (up to 3 attempts)
     caption = generate_caption(features_text, theme, remarks, caption_style)
+    time.sleep(5)  # avoid burst rate limit between consecutive Gemini calls
     for attempt in range(3):
         is_valid, reason = fact_check_caption(features_text, caption)
         if is_valid:
@@ -615,6 +618,7 @@ def generate_draft(
             break
         print(f"[Agent] Fact-check FAILED ({attempt+1}): {reason}")
         if attempt < 2:
+            time.sleep(5)
             caption = generate_caption(
                 features_text, theme,
                 remarks=f"Previous caption failed fact-check: {reason}. Fix the issues.",
@@ -624,6 +628,7 @@ def generate_draft(
         print("[Agent] WARNING: Caption still has issues after 3 attempts — proceeding.")
 
     # Generate image
+    time.sleep(5)
     image_prompt, neg_prompt = generate_image_prompt(features_text, theme, image_style)
     image_url = generate_image(image_prompt, neg_prompt, state=state)
 
