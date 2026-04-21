@@ -40,19 +40,18 @@ INSTAGRAM_ACCOUNT_ID   = os.environ["INSTAGRAM_ACCOUNT_ID"]
 IMGBB_API_KEY          = os.environ.get("IMGBB_API_KEY", "")
 
 def _gemini_url(model: str) -> str:
-    # Use v1 (stable) for 1.5 models, v1beta for 2.x models
-    version = "v1beta" if "2." in model or "2.5" in model else "v1"
+    # Always v1beta — required for system_instruction support
     return (
-        f"https://generativelanguage.googleapis.com/{version}/models/"
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{model}:generateContent?key={GEMINI_API_KEY}"
     )
 
-# Models in order — newer models first, stable fallbacks last
+# Models in order — try newest first, stable fallbacks last
 GEMINI_MODELS = [
-    "gemini-2.5-flash-preview-04-17",  # latest, shown on rate limits page
-    "gemini-2.0-flash-lite",            # cheapest 2.x
-    "gemini-1.5-flash",                 # stable fallback (uses v1)
-    "gemini-1.5-flash-8b",              # lightest fallback (uses v1)
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
 ]
 
 # Local fallback draft path (used for --dry-run and --post-now only)
@@ -88,58 +87,76 @@ def _save_state(state: dict) -> None:
 
 # ── HTTP / Gemini ─────────────────────────────────────────────────────────────
 
-def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) -> str:
-    """Call Gemini 2.0 Flash. Retries up to 6x with exponential backoff on 429/timeout."""
-    payload = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"parts": [{"text": user_msg}]}],
+def _make_payload(system_prompt: str, user_msg: str, max_tokens: int,
+                  use_system_instruction: bool = True) -> dict:
+    if use_system_instruction:
+        return {
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"parts": [{"text": user_msg}]}],
+            "generationConfig": {"temperature": 0.9, "maxOutputTokens": max_tokens},
+        }
+    # Fallback: merge system prompt into user message
+    return {
+        "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_msg}"}]}],
         "generationConfig": {"temperature": 0.9, "maxOutputTokens": max_tokens},
     }
-    # Try each model in order — each has its own separate free quota pool
+
+
+def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) -> str:
+    """Call Gemini API. Cascades through models on 404/rate-limit."""
     last_errors = {}
     for model in GEMINI_MODELS:
-        print(f"[Gemini] Trying model: {model}")
         url = _gemini_url(model)
-        for attempt in range(3):
-            try:
-                r = req.post(url, json=payload, timeout=90)
-                print(f"[Gemini] HTTP {r.status_code} from {model}")
-                data = r.json()
-            except req.exceptions.Timeout:
-                print(f"[Gemini] Timeout ({model}, attempt {attempt+1}/3). Waiting 65s...")
-                time.sleep(65)
-                continue
-            if "error" in data:
-                err    = data["error"]
-                code   = err.get("code") or err.get("status", "")
-                status = err.get("status", "")
-                msg    = err.get("message", "")
-                print(f"[Gemini] {model} error — code={code} status={status} msg={msg[:120]}")
-                last_errors[model] = f"{code}: {msg[:80]}"
-                # Model unavailable → skip to next
-                if code == 404 or status == "NOT_FOUND":
-                    break
-                # Invalid key / permission denied → no point retrying other models
-                if code == 400 or code == 403 or status in ("INVALID_ARGUMENT", "PERMISSION_DENIED"):
-                    raise RuntimeError(
-                        f"Gemini API key error ({status}): {msg}\n"
-                        "→ Check that GEMINI_API_KEY secret is updated in GitHub repo settings."
-                    )
-                # Rate limited → wait and retry, then move on
-                if code == 429 or "RESOURCE_EXHAUSTED" in str(code):
-                    if attempt < 2:
-                        print(f"[Gemini] Rate limited. Waiting 65s (attempt {attempt+1}/3)...")
-                        time.sleep(65)
-                        continue
-                    else:
-                        print(f"[Gemini] {model} quota exhausted — trying next model.")
+        # Try with system_instruction first, then without if model rejects it
+        for use_si in (True, False):
+            payload = _make_payload(system_prompt, user_msg, max_tokens, use_si)
+            label = model if use_si else f"{model}(no-SI)"
+            print(f"[Gemini] Trying {label}")
+            for attempt in range(3):
+                try:
+                    r = req.post(url, json=payload, timeout=90)
+                    print(f"[Gemini] HTTP {r.status_code} from {label}")
+                    data = r.json()
+                except req.exceptions.Timeout:
+                    print(f"[Gemini] Timeout ({label}, attempt {attempt+1}/3). Waiting 65s...")
+                    time.sleep(65)
+                    continue
+                if "error" in data:
+                    err    = data["error"]
+                    code   = err.get("code") or 0
+                    status = err.get("status", "")
+                    msg    = err.get("message", "")
+                    print(f"[Gemini] {label} — {code} {status}: {msg[:120]}")
+                    last_errors[label] = f"{code}: {msg[:80]}"
+                    # Model not available → try next model
+                    if code == 404 or status == "NOT_FOUND":
                         break
-                # Unknown error — skip model
-                print(f"[Gemini] Unknown error for {model} — trying next model.")
-                break
-            print(f"[Gemini] ✓ Success with {model}")
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    raise RuntimeError(f"All Gemini models failed. Errors: {last_errors}")
+                    # system_instruction not supported → retry without it
+                    if code == 400 and "system_instruction" in msg:
+                        break  # breaks inner attempt loop → use_si=False next
+                    # Permission denied → bad key, fail fast
+                    if code == 403 or status == "PERMISSION_DENIED":
+                        raise RuntimeError(
+                            f"Gemini API key rejected ({status}): {msg}\n"
+                            "→ Update GEMINI_API_KEY in GitHub repo Settings → Secrets."
+                        )
+                    # Rate limited → wait then try next model
+                    if code == 429 or "RESOURCE_EXHAUSTED" in status:
+                        if attempt < 2:
+                            print(f"[Gemini] Rate limited. Waiting 65s...")
+                            time.sleep(65)
+                            continue
+                        break
+                    # Other error → skip model
+                    break
+                # Success
+                print(f"[Gemini] ✓ Success with {label}")
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            else:
+                continue  # all 3 attempts exhausted → try next use_si
+            if code == 404 or status == "NOT_FOUND":
+                break  # skip remaining use_si variants, go to next model
+    raise RuntimeError(f"All Gemini models failed.\n{last_errors}")
 
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
