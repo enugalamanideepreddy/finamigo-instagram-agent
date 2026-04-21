@@ -46,7 +46,7 @@ def _gemini_url(model: str) -> str:
     )
 
 # Models tried in order — each has its own separate quota pool
-GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+GEMINI_MODELS = ["gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
 
 # Local fallback draft path (used for --dry-run and --post-now only)
 DRAFT_PATH = os.path.join(os.path.dirname(__file__), "draft.json")
