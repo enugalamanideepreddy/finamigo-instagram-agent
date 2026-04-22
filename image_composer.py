@@ -3,12 +3,11 @@ Composites clean FinAmigo branding onto a generated image using Pillow.
 
 Why: AI image models (including Ideogram) cannot reliably render legible text.
 This module downloads the raw generated image and draws crisp vector-quality
-text on top — brand name, tagline — then re-uploads to imgbb.
+text on top — brand name, tagline — then re-uploads to catbox.moe.
 """
 
 import io
 import os
-import textwrap
 from typing import Optional
 
 import requests
@@ -17,135 +16,199 @@ from PIL import Image, ImageDraw, ImageFont
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY", "")
 
 # ── Font loading ───────────────────────────────────────────────────────────────
-# Uses system fonts available on Ubuntu GitHub Actions runners.
-# Priority: bold sans-serif → fallback to PIL default.
+# Priority: bold/regular sans-serif → PIL default fallback.
 
 def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    candidates = []
-    if bold:
-        candidates = [
+    candidates = (
+        [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
             "/usr/share/fonts/truetype/ubuntu/Ubuntu-Bold.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",  # macOS
+            "/System/Library/Fonts/Helvetica.ttc",
         ]
-    else:
-        candidates = [
+        if bold else
+        [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
             "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
             "/System/Library/Fonts/Helvetica.ttc",
         ]
+    )
     for path in candidates:
         if os.path.exists(path):
             return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
 
-# ── Core compositing ──────────────────────────────────────────────────────────
+def _text_w(draw: ImageDraw.ImageDraw, text: str, font) -> int:
+    """Return pixel width of a single-line string."""
+    bb = draw.textbbox((0, 0), text, font=font)
+    return bb[2] - bb[0]
 
-def _draw_text_with_shadow(
+
+def _wrap_to_pixels(draw: ImageDraw.ImageDraw, text: str, font, max_px: int) -> str:
+    """Word-wrap text so no line exceeds max_px wide."""
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = (current + " " + word).strip()
+        if _text_w(draw, candidate, font) <= max_px:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
+
+def _draw_text_shadowed(
     draw: ImageDraw.ImageDraw,
     xy: tuple,
     text: str,
-    font: ImageFont.FreeTypeFont,
+    font,
     fill: tuple,
-    shadow_color: tuple = (0, 0, 0, 160),
-    shadow_offset: int = 3,
-):
-    """Draw text with a drop shadow for legibility on any background."""
+    shadow_color: tuple = (0, 0, 0, 180),
+    shadow_offset: int = 2,
+    align: str = "left",
+) -> None:
+    """Draw text with a crisp drop shadow."""
     x, y = xy
-    # Shadow
-    draw.text((x + shadow_offset, y + shadow_offset), text, font=font, fill=shadow_color)
-    # Main text
-    draw.text((x, y), text, font=font, fill=fill)
+    draw.text((x + shadow_offset, y + shadow_offset), text, font=font,
+              fill=shadow_color, align=align)
+    draw.text((x, y), text, font=font, fill=fill, align=align)
 
+
+# ── Gradient helpers ──────────────────────────────────────────────────────────
+
+def _draw_gradient_band(draw: ImageDraw.ImageDraw, w: int, y_start: int, y_end: int,
+                        color: tuple = (0, 0, 0)) -> None:
+    """Vertical gradient strip from transparent → opaque (bottom-weighted)."""
+    band_h = y_end - y_start
+    for i in range(band_h):
+        # Ease-in: slow rise then steep near bottom
+        t = i / max(band_h - 1, 1)
+        alpha = int(200 * (t ** 0.6))
+        draw.rectangle([(0, y_start + i), (w, y_start + i + 1)],
+                        fill=(*color, alpha))
+
+
+# ── Core compositing ──────────────────────────────────────────────────────────
 
 def composite_branding(
     image_url: str,
     tagline: str = "",
     brand_name: str = "FinAmigo",
 ) -> bytes:
-    """Download image, draw branding, return composited JPEG bytes."""
-    # Download raw image
+    """Download image, composite FinAmigo branding, return JPEG bytes."""
     r = requests.get(image_url, timeout=60)
     r.raise_for_status()
     img = Image.open(io.BytesIO(r.content)).convert("RGBA")
     w, h = img.size
 
-    # Create overlay layer (transparent)
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # ── Brand name: top-left ─────────────────────────────────────────────────
-    brand_size = max(48, w // 14)
+    # ── Spacing constants (scale with image size) ────────────────────────────
+    edge   = max(28, w // 22)   # outer margin from image edge
+    inner  = max(14, w // 40)   # padding inside pills / band
+
+    # ── Brand name: top-left pill ────────────────────────────────────────────
+    brand_size = max(42, w // 15)
     brand_font = _get_font(brand_size, bold=True)
-    pad = w // 28
 
-    # Semi-transparent dark pill behind brand name
-    bbox = draw.textbbox((pad, pad), brand_name, font=brand_font)
-    pill_pad = 12
+    bx, by = edge, edge
+    bb = draw.textbbox((bx, by), brand_name, font=brand_font)
+    pill = (bb[0] - inner,      bb[1] - inner // 2,
+            bb[2] + inner,      bb[3] + inner // 2)
+
+    # Dark pill
+    draw.rounded_rectangle(pill, radius=10, fill=(0, 0, 0, 155))
+    # Teal left accent bar
     draw.rounded_rectangle(
-        (bbox[0] - pill_pad, bbox[1] - pill_pad // 2,
-         bbox[2] + pill_pad, bbox[3] + pill_pad // 2),
-        radius=8,
-        fill=(0, 0, 0, 140),
+        (pill[0], pill[1], pill[0] + 5, pill[3]),
+        radius=3, fill=(13, 148, 136, 255),
     )
-    # Teal brand text
-    _draw_text_with_shadow(
-        draw, (pad, pad), brand_name, brand_font,
-        fill=(13, 148, 136, 255),  # #0d9488 teal
-    )
+    _draw_text_shadowed(draw, (bx, by), brand_name, brand_font,
+                        fill=(13, 148, 136, 255))
 
-    # ── Tagline: bottom-center ───────────────────────────────────────────────
+    # ── Badge size (needed to calculate bottom band height) ──────────────────
+    badge_text = "Coming Soon"
+    badge_size = max(17, w // 44)
+    badge_font = _get_font(badge_size, bold=True)
+    bbl        = draw.textbbox((0, 0), badge_text, font=badge_font)
+    badge_w    = bbl[2] - bbl[0]
+    badge_h    = bbl[3] - bbl[1]
+    badge_pill_h = inner // 2   # vertical padding inside badge pill
+    badge_pill_w = inner         # horizontal padding inside badge pill
+    badge_total_h = badge_h + badge_pill_h * 2
+
+    # ── Tagline layout ───────────────────────────────────────────────────────
     if tagline:
-        tag_size = max(24, w // 30)
+        tag_size = max(23, w // 30)
         tag_font = _get_font(tag_size, bold=False)
 
-        # Wrap long taglines
-        max_chars = max(20, w // (tag_size // 2))
-        wrapped = "\n".join(textwrap.wrap(tagline, width=max_chars))
+        # Pixel-accurate word-wrap — safe zone keeps text well inside edges
+        safe_w  = w - edge * 4
+        wrapped = _wrap_to_pixels(draw, tagline, tag_font, safe_w)
 
-        tag_bbox = draw.textbbox((0, 0), wrapped, font=tag_font)
-        tag_w = tag_bbox[2] - tag_bbox[0]
-        tag_h = tag_bbox[3] - tag_bbox[1]
-        tag_x = (w - tag_w) // 2
-        tag_y = h - tag_h - pad * 2
+        tbb    = draw.textbbox((0, 0), wrapped, font=tag_font)
+        tag_w  = tbb[2] - tbb[0]
+        tag_h  = tbb[3] - tbb[1]
 
-        # Dark pill behind tagline
-        pill_pad = 16
+        # Band: tagline block + gap + badge row, all with inner padding
+        gap        = inner
+        band_inner = inner                         # top padding inside band
+        band_h     = band_inner + tag_h + gap + badge_total_h + edge
+        band_y     = h - band_h
+
+        # Gradient band across full width
+        _draw_gradient_band(draw, w, band_y, h)
+
+        # Tagline — centered horizontally
+        tag_x = max(edge * 2, (w - tag_w) // 2)
+        tag_y = band_y + band_inner
+        _draw_text_shadowed(draw, (tag_x, tag_y), wrapped, tag_font,
+                            fill=(255, 255, 255, 248),
+                            shadow_color=(0, 0, 0, 210),
+                            align="center")
+
+        # "Coming Soon" teal pill badge — bottom-right
+        badge_x = w - badge_w - badge_pill_w - edge
+        badge_y = tag_y + tag_h + gap + badge_pill_h
         draw.rounded_rectangle(
-            (tag_x - pill_pad, tag_y - pill_pad // 2,
-             tag_x + tag_w + pill_pad, tag_y + tag_h + pill_pad // 2),
-            radius=8,
-            fill=(0, 0, 0, 150),
+            (badge_x - badge_pill_w,
+             badge_y - badge_pill_h,
+             badge_x + badge_w + badge_pill_w,
+             badge_y + badge_h + badge_pill_h),
+            radius=20,
+            fill=(13, 148, 136, 235),
         )
-        _draw_text_with_shadow(
-            draw, (tag_x, tag_y), wrapped, tag_font,
-            fill=(255, 255, 255, 240),
+        draw.text((badge_x, badge_y), badge_text,
+                  font=badge_font, fill=(255, 255, 255, 255))
+
+    else:
+        # No tagline — minimal gradient strip + badge only
+        band_h = badge_total_h + edge * 2
+        band_y = h - band_h
+        _draw_gradient_band(draw, w, band_y, h)
+
+        badge_x = w - badge_w - badge_pill_w - edge
+        badge_y = band_y + edge + badge_pill_h
+        draw.rounded_rectangle(
+            (badge_x - badge_pill_w,
+             badge_y - badge_pill_h,
+             badge_x + badge_w + badge_pill_w,
+             badge_y + badge_h + badge_pill_h),
+            radius=20,
+            fill=(13, 148, 136, 235),
         )
+        draw.text((badge_x, badge_y), badge_text,
+                  font=badge_font, fill=(255, 255, 255, 255))
 
-    # ── "Coming Soon" badge: bottom-right ───────────────────────────────────
-    badge_text = "Coming Soon"
-    badge_size = max(18, w // 40)
-    badge_font = _get_font(badge_size, bold=True)
-    badge_bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
-    bw = badge_bbox[2] - badge_bbox[0]
-    bh = badge_bbox[3] - badge_bbox[1]
-    bx = w - bw - pad * 2
-    by = h - bh - pad
-
-    draw.rounded_rectangle(
-        (bx - 10, by - 6, bx + bw + 10, by + bh + 6),
-        radius=6,
-        fill=(13, 148, 136, 200),
-    )
-    draw.text((bx, by), badge_text, font=badge_font, fill=(255, 255, 255, 255))
-
-    # Composite overlay onto image
     composited = Image.alpha_composite(img, overlay).convert("RGB")
-
-    # Return as JPEG bytes
     buf = io.BytesIO()
     composited.save(buf, format="JPEG", quality=92)
     return buf.getvalue()
