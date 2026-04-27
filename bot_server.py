@@ -272,6 +272,18 @@ async def webhook(req: Request):
                 else:
                     _answer(cq["id"], "⚠️ Draft not found — it may have already been handled.")
 
+            # Draft: reject
+            elif action == "reject":
+                draft = state.get("draft")
+                if draft and draft.get("draft_id") == payload:
+                    _answer(cq["id"], "❌ Draft rejected and discarded.", alert=True)
+                    state["draft"]            = None
+                    state["awaiting_remarks"] = False
+                    _save(state)
+                    _send("❌ <b>Draft rejected.</b> Send /post to generate a new one.")
+                else:
+                    _answer(cq["id"], "⚠️ Draft not found — it may have already been handled.")
+
             # Draft: revise
             elif action == "revise":
                 draft = state.get("draft")
@@ -340,10 +352,15 @@ async def register_draft(req: Request):
         state["awaiting_remarks"] = False
         _save(state)
 
-    keyboard = {"inline_keyboard": [[
-        {"text": "✅ Approve", "callback_data": f"approve|{draft_id}"},
-        {"text": "✏️ Revise",  "callback_data": f"revise|{draft_id}"},
-    ]]}
+    keyboard = {"inline_keyboard": [
+        [
+            {"text": "✅ Approve", "callback_data": f"approve|{draft_id}"},
+            {"text": "✏️ Revise",  "callback_data": f"revise|{draft_id}"},
+        ],
+        [
+            {"text": "❌ Reject",  "callback_data": f"reject|{draft_id}"},
+        ],
+    ]}
     text = (
         f"📸 <b>New FinAmigo Draft</b>\n\n"
         f"<b>Theme:</b> {_esc(theme)}\n"
