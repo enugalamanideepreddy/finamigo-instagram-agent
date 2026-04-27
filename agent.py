@@ -663,13 +663,15 @@ def generate_draft(
 ) -> dict:
     """Generate a complete post draft with caption + image."""
     features_text = fetch_features()
-    theme         = pick_theme(state)
     caption_style = forced_caption_style or pick_caption_style(state)
     image_style   = forced_image_style   or pick_image_style(state)
 
-    # Merge extra_context into remarks if provided
     if extra_context:
-        remarks = (remarks + "\n\nExtra context: " + extra_context) if remarks else "Context: " + extra_context
+        # User's context becomes the theme so caption AND image both target it.
+        # Don't record it in used_themes — it's user-directed, not a rotation slot.
+        theme = extra_context
+    else:
+        theme = pick_theme(state)
 
     print(f"\n[Agent] Theme: {theme}")
     print(f"[Agent] Caption style: {caption_style['name']} | Image style: {image_style['name']}")
