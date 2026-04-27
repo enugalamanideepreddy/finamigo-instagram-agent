@@ -112,6 +112,7 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
             payload = _make_payload(system_prompt, user_msg, max_tokens, use_si)
             label = model if use_si else f"{model}(no-SI)"
             print(f"[Gemini] Trying {label}")
+            code = 0; status = ""  # reset per use_si iteration
             for attempt in range(3):
                 try:
                     r = req.post(url, json=payload, timeout=90)
