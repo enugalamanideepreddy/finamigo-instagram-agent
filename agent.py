@@ -503,10 +503,16 @@ def generate_image_tagline(theme: str) -> str:
         "- Punchy, benefit-led, present tense\n"
         "- NO emojis, NO hashtags, NO punctuation except a period or dash\n"
         "- Write like Apple or CRED — minimal, confident\n"
-        "- Examples: 'Your money. Finally clear.' | 'Finance without the noise.' | 'Know every rupee.'"
+        "- Examples: 'Your money. Finally clear.' | 'Finance without the noise.' | 'Know every rupee.'\n"
+        "- Output ONLY the tagline — no quotes, no explanation."
     )
-    result = gemini_generate(system, f"Theme: {theme}\nWrite the tagline.", max_tokens=50)
-    return result.strip('"').strip()[:60]  # hard cap so overlay never overflows
+    result = gemini_generate(system, f"Theme: {theme}\nWrite the tagline.", max_tokens=80)
+    result = result.strip().strip('"').strip("'")
+    # If result looks truncated or empty, fall back to first 6 words of theme
+    if len(result) < 8 or " " not in result:
+        words = theme.split()[:6]
+        result = " ".join(words)
+    return result[:60]
 
 
 STATIC_IMAGES_PATH = os.path.join(os.path.dirname(__file__), "images.json")
