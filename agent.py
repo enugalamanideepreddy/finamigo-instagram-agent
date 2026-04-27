@@ -368,6 +368,32 @@ def pick_image_style(state: dict) -> dict:
     return _pick_random_unused(IMAGE_VISUAL_STYLES, used, key="name")
 
 
+# ── Context refinement ────────────────────────────────────────────────────────
+
+def refine_context_to_theme(features_text: str, raw_context: str) -> str:
+    """
+    Turn a short user note (e.g. "Internal Transfers") into a punchy marketing
+    theme angle like the entries in THEME_POOL — benefit-led, specific, Instagram-ready.
+    """
+    system = (
+        "You are a fintech marketing strategist for FinAmigo — an offline-first personal "
+        "finance app for Indian users. Your job is to turn a short user note into a "
+        "single punchy Instagram theme angle.\n\n"
+        "Rules:\n"
+        "- One sentence, max 15 words\n"
+        "- Lead with the USER BENEFIT (peace of mind, clarity, control, savings)\n"
+        "- Ground it in the Feature Reference — only reference real features\n"
+        "- Write like CRED or Apple — minimal, impactful\n"
+        "- NO technical jargon, NO emojis\n\n"
+        f"=== FEATURE REFERENCE ===\n{features_text}\n=== END ==="
+    )
+    user_msg = (
+        f"User note: \"{raw_context}\"\n\n"
+        "Write ONE punchy theme angle sentence for an Instagram post about this topic."
+    )
+    return gemini_generate(system, user_msg, max_tokens=60)
+
+
 # ── Caption Generation ────────────────────────────────────────────────────────
 
 _DOW_TONE = {
@@ -667,9 +693,11 @@ def generate_draft(
     image_style   = forced_image_style   or pick_image_style(state)
 
     if extra_context:
-        # User's context becomes the theme so caption AND image both target it.
+        # Refine the raw user note into a proper marketing angle, then use it
+        # as the theme so caption AND image both target it.
         # Don't record it in used_themes — it's user-directed, not a rotation slot.
-        theme = extra_context
+        theme = refine_context_to_theme(features_text, extra_context)
+        print(f"[Agent] Context refined: '{extra_context}' → '{theme}'")
     else:
         theme = pick_theme(state)
 
