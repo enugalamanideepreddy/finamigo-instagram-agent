@@ -438,7 +438,7 @@ def generate_caption(
     )
     if remarks:
         user_msg += f"\n\nREVISION NOTES (from reviewer): {remarks}"
-    return gemini_generate(build_system_prompt(features_text), user_msg, max_tokens=600)
+    return gemini_generate(build_system_prompt(features_text), user_msg, max_tokens=1000)
 
 
 def fact_check_caption(features_text: str, caption: str) -> Tuple[bool, str]:
@@ -482,6 +482,23 @@ def generate_image_prompt(
         "cartoon, sketch, drawing, low quality, blurry, watermark, signature"
     )
     return prompt, negative
+
+
+def generate_image_tagline(theme: str) -> str:
+    """
+    Generate a short, punchy 4–6 word visual tagline for the image overlay.
+    Designed to read well as large text on a dark gradient band.
+    """
+    system = (
+        "You write ultra-short visual taglines for app marketing images. "
+        "Rules:\n"
+        "- Exactly 4–6 words. No more.\n"
+        "- Punchy, benefit-led, present tense\n"
+        "- NO emojis, NO hashtags, NO punctuation except a period or dash\n"
+        "- Write like Apple or CRED — minimal, confident\n"
+        "- Examples: 'Your money. Finally clear.' | 'Finance without the noise.' | 'Know every rupee.'"
+    )
+    return gemini_generate(system, f"Theme: {theme}\nWrite the tagline.", max_tokens=20).strip('"').strip()
 
 
 STATIC_IMAGES_PATH = os.path.join(os.path.dirname(__file__), "images.json")
@@ -580,7 +597,7 @@ def _ensure_image_url(draft: dict, state: dict) -> str:
     if is_imgbb:
         print("[Agent] imgbb URL detected — re-uploading to catbox.moe for Instagram...")
         from image_composer import upload_composited as _rehost
-        tagline = draft.get("theme", "")[:60]
+        tagline = draft.get("image_tagline") or draft.get("theme", "")[:60]
         return _rehost(url, tagline=tagline)
 
     # URL expired — re-generate image and re-composite branding
@@ -726,12 +743,15 @@ def generate_draft(
     # Generate image
     time.sleep(5)
     image_prompt, neg_prompt = generate_image_prompt(features_text, theme, image_style)
+    image_tagline = generate_image_tagline(theme)
+    print(f"[Agent] Image tagline: {image_tagline}")
     image_url = generate_image(image_prompt, neg_prompt, state=state)
 
     draft = {
         "draft_id":     _approval_mod.generate_draft_id(),
         "date":         datetime.now().strftime("%Y-%m-%d"),
         "theme":        theme,
+        "image_tagline": image_tagline,
         "caption_style": caption_style["name"],
         "image_style":  image_style["name"],
         "caption":      caption,
@@ -812,7 +832,7 @@ def run_generate_with_state(
     save_draft(draft, state)
     _save_state(state)
 
-    tg_image_url = upload_composited(draft["image_url"], tagline=draft.get("theme", "")[:60])
+    tg_image_url = upload_composited(draft["image_url"], tagline=draft.get("image_tagline", ""))
     draft["image_url"] = tg_image_url
     save_draft(draft, state)
 
