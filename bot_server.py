@@ -19,6 +19,27 @@ from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
 
+
+@app.on_event("startup")
+def _register_commands() -> None:
+    """Register bot commands with Telegram so users see suggestions when typing /."""
+    commands = [
+        {"command": "post",   "description": "Generate a new Instagram post draft"},
+        {"command": "skip",   "description": "Skip context step and generate immediately"},
+        {"command": "cancel", "description": "Cancel the current wizard"},
+        {"command": "status", "description": "Check if there's a pending draft"},
+        {"command": "help",   "description": "Show available commands"},
+    ]
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{_tok()}/setMyCommands",
+            json={"commands": commands},
+            timeout=10,
+        )
+        print(f"[TG] setMyCommands → {r.status_code} {r.text[:80]}")
+    except Exception as e:
+        print(f"[TG] setMyCommands failed: {e}")
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 def _tok():    return os.environ.get("TELEGRAM_BOT_TOKEN", "")
