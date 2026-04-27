@@ -614,8 +614,16 @@ def _ensure_image_url(draft: dict, state: dict) -> str:
         tagline = draft.get("image_tagline") or draft.get("theme", "")[:60]
         return _rehost(url, tagline=tagline)
 
-    # URL expired — re-generate image and re-composite branding
-    print("[Agent] Image URL expired — re-generating...")
+    # Composited URL expired — re-composite from the preserved raw AI image URL.
+    # This guarantees the same image that was approved gets posted, not a new one.
+    raw_url = draft.get("raw_image_url", "")
+    tagline  = draft.get("image_tagline") or draft.get("theme", "")[:60]
+    if raw_url and _is_url_image(raw_url):
+        print("[Agent] Re-compositing from preserved raw image URL...")
+        return upload_composited(raw_url, tagline=tagline)
+
+    # Raw URL also expired — last resort: re-generate (rare, only after days)
+    print("[Agent] Raw image URL also expired — re-generating as last resort...")
     image_style_name = draft.get("image_style")
     image_style = next(
         (s for s in IMAGE_VISUAL_STYLES if s["name"] == image_style_name), None
@@ -624,8 +632,8 @@ def _ensure_image_url(draft: dict, state: dict) -> str:
     image_prompt, neg = generate_image_prompt(features_text, draft["theme"], image_style)
     new_url = generate_image(image_prompt, neg, state=state)
     draft["image_url"] = new_url
+    draft["raw_image_url"] = new_url
     draft["image_prompt"] = image_prompt
-    tagline = draft.get("theme", "")[:60]
     return upload_composited(new_url, tagline=tagline)
 
 
@@ -846,6 +854,9 @@ def run_generate_with_state(
     save_draft(draft, state)
     _save_state(state)
 
+    # Preserve raw AI-generated URL before overwriting with composited version.
+    # Used by _ensure_image_url to re-composite without re-generating a new image.
+    draft["raw_image_url"] = draft["image_url"]
     tg_image_url = upload_composited(draft["image_url"], tagline=draft.get("image_tagline", ""))
     draft["image_url"] = tg_image_url
     save_draft(draft, state)

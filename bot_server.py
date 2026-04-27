@@ -361,17 +361,23 @@ async def register_draft(req: Request):
             {"text": "❌ Reject",  "callback_data": f"reject|{draft_id}"},
         ],
     ]}
-    text = (
+    # Photo caption: metadata + approve/reject buttons (keep short, Telegram limit 1024)
+    photo_text = (
         f"📸 <b>New FinAmigo Draft</b>\n\n"
         f"<b>Theme:</b> {_esc(theme)}\n"
         f"<b>Style:</b> {_esc(cap_style)} · {_esc(img_style)}\n"
-        f"<b>Draft ID:</b> <code>{draft_id}</code>\n\n"
-        f"───────────────\n{_esc(caption[:900])}"
+        f"<b>Draft ID:</b> <code>{draft_id}</code>"
     )
     r = _tg("sendPhoto", chat_id=_cid(), photo=image_url,
-            caption=text, parse_mode="HTML", reply_markup=keyboard)
+            caption=photo_text, parse_mode="HTML", reply_markup=keyboard)
     if not r.get("ok"):
-        _tg("sendMessage", chat_id=_cid(), text=text, parse_mode="HTML", reply_markup=keyboard)
+        _tg("sendMessage", chat_id=_cid(), text=photo_text, parse_mode="HTML", reply_markup=keyboard)
+
+    # Send the FULL caption as a separate message so what you approve = what posts
+    _tg("sendMessage", chat_id=_cid(), text=(
+        f"📝 <b>Full Caption</b> (exactly what will be posted):\n\n"
+        f"<code>{_esc(caption)}</code>"
+    ), parse_mode="HTML")
 
     return {"ok": True}
 
