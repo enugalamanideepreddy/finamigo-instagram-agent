@@ -151,7 +151,13 @@ def gemini_generate(system_prompt: str, user_msg: str, max_tokens: int = 600) ->
                     break
                 # Success
                 print(f"[Gemini] ✓ Success with {label}")
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                candidate = data["candidates"][0]
+                parts = candidate.get("content", {}).get("parts")
+                if not parts:
+                    # Hit max_tokens mid-generation — treat as retriable error
+                    print(f"[Gemini] Empty parts (likely max_tokens too low). finish: {candidate.get('finishReason')}")
+                    break
+                return parts[0]["text"].strip()
             else:
                 continue  # all 3 attempts exhausted → try next use_si
             if code == 404 or status == "NOT_FOUND":
@@ -498,7 +504,8 @@ def generate_image_tagline(theme: str) -> str:
         "- Write like Apple or CRED — minimal, confident\n"
         "- Examples: 'Your money. Finally clear.' | 'Finance without the noise.' | 'Know every rupee.'"
     )
-    return gemini_generate(system, f"Theme: {theme}\nWrite the tagline.", max_tokens=20).strip('"').strip()
+    result = gemini_generate(system, f"Theme: {theme}\nWrite the tagline.", max_tokens=50)
+    return result.strip('"').strip()[:60]  # hard cap so overlay never overflows
 
 
 STATIC_IMAGES_PATH = os.path.join(os.path.dirname(__file__), "images.json")
