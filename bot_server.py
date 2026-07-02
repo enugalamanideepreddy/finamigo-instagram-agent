@@ -10,6 +10,7 @@ Endpoints:
   GET  /health          — Health check
 """
 
+import hmac
 import json
 import os
 import threading
@@ -224,6 +225,12 @@ def _handle_cmd(cmd: str, state: dict) -> None:
 async def webhook(req: Request):
     update = await req.json()
 
+    _tg_secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+    if _tg_secret:
+        incoming = req.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not hmac.compare_digest(incoming, _tg_secret):
+            return {"ok": True}
+
     with _lock:
         state = _load()
 
@@ -334,7 +341,10 @@ async def webhook(req: Request):
 @app.post("/register_draft")
 async def register_draft(req: Request):
     """generate.yml calls this after creating a draft. Bot sends the Telegram approval message."""
-    if _secret() and req.headers.get("X-Bot-Secret") != _secret():
+    secret = _secret()
+    if not secret:
+        raise HTTPException(status_code=503, detail="BOT_API_SECRET not configured")
+    if not hmac.compare_digest(req.headers.get("X-Bot-Secret", ""), secret):
         raise HTTPException(status_code=403)
 
     data      = await req.json()
@@ -385,7 +395,10 @@ async def register_draft(req: Request):
 @app.post("/notify")
 async def notify_endpoint(req: Request):
     """post.yml calls this after posting to Instagram."""
-    if _secret() and req.headers.get("X-Bot-Secret") != _secret():
+    secret = _secret()
+    if not secret:
+        raise HTTPException(status_code=503, detail="BOT_API_SECRET not configured")
+    if not hmac.compare_digest(req.headers.get("X-Bot-Secret", ""), secret):
         raise HTTPException(status_code=403)
 
     data = await req.json()
